@@ -3,4 +3,5 @@ Repositório de atividades desenvolvidas na disciplina de Engenharia de Software
 
 ## Membros da equipe
 Gabriel Mattias Antunes:         RA 281199
+
 Lucas Gomes Bussinger da Silva:  RA 247314
