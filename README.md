@@ -9,3 +9,5 @@ Gabriel de Macedo Cavassani Montagna:   RA 242352
 Gabriel Mattias Antunes:                RA 281199
 
 Lucas Gomes Bussinger da Silva:         RA 247314
+
+Lucas Lembo de Lara:                    RA 254467
