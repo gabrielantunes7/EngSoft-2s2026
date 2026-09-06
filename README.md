@@ -11,3 +11,5 @@ Gabriel Mattias Antunes:                RA 281199
 Lucas Gomes Bussinger da Silva:         RA 247314
 
 Lucas Lembo de Lara:                    RA 254467
+
+Rafael Scalabrin Dosso:                 RA 205237
