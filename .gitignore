@@ -1,0 +1,19 @@
+# Artefatos de build
+build/
+dist/
+*.egg-info/
+
+# Bytecode e caches do Python
+__pycache__/
+*.py[cod]
+
+# Ambientes virtuais
+.venv/
+venv/
+
+# Caches de ferramentas
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
