@@ -3,7 +3,7 @@ VENV := .venv
 BIN := $(VENV)/bin
 DIST := dist
 
-.PHONY: help venv install build verify clean
+.PHONY: help venv install build verify lint format clean
 
 help:
 	@echo "Alvos disponíveis:"
@@ -11,6 +11,8 @@ help:
 	@echo "  make install  - instala o projeto em modo editável com as dependências de desenvolvimento"
 	@echo "  make build    - gera os artefatos de distribuição (wheel e sdist) em $(DIST)/"
 	@echo "  make verify   - instala o wheel gerado em um ambiente limpo e valida a importação"
+	@echo "  make lint     - executa a análise estática (falha se houver violações)"
+	@echo "  make format   - corrige automaticamente o que for corrigível e formata o código"
 	@echo "  make clean    - remove artefatos de build e caches"
 
 $(BIN)/activate:
@@ -21,6 +23,14 @@ venv: $(BIN)/activate
 
 install: venv
 	$(BIN)/pip install -e ".[dev]"
+
+lint: install
+	$(BIN)/ruff check .
+	$(BIN)/ruff format --check .
+
+format: install
+	$(BIN)/ruff check --fix .
+	$(BIN)/ruff format .
 
 build: install
 	rm -rf $(DIST)
