@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "votacao"
+version = "0.1.0"
+description = "Sistema de votação digital com motor de regras extensível"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "Gabriel de Macedo Cavassani Montagna" },
+    { name = "Gabriel Mattias Antunes" },
+    { name = "Lucas Gomes Bussinger da Silva" },
+    { name = "Lucas Lembo de Lara" },
+    { name = "Rafael Scalabrin Dosso" },
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
