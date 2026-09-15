@@ -20,7 +20,36 @@ dependencies = []
 [project.optional-dependencies]
 dev = [
     "build>=1.2",
+    "ruff>=0.6",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Conjunto de regras definido pela equipe. Toda violação listada aqui é
+# impeditiva: falha o `ruff check` e, por consequência, o pipeline.
+select = [
+    "E",   # pycodestyle: erros de estilo
+    "W",   # pycodestyle: avisos de estilo
+    "F",   # pyflakes: imports não usados, variáveis indefinidas, f-strings vazias
+    "I",   # isort: ordenação e agrupamento de imports
+    "N",   # pep8-naming: nomes de classes, funções e variáveis
+    "UP",  # pyupgrade: sintaxe legada que já tem equivalente em Python 3.12
+    "B",   # flake8-bugbear: armadilhas comuns (ex.: argumento default mutável)
+    "SIM", # flake8-simplify: condicionais e blocos redundantes
+    "RUF", # regras próprias do Ruff
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Testes podem usar asserts e nomes longos e descritivos sem restrição.
+"tests/**" = ["N802"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
