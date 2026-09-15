@@ -3,7 +3,7 @@ VENV := .venv
 BIN := $(VENV)/bin
 DIST := dist
 
-.PHONY: help venv install build verify lint format clean
+.PHONY: help venv install build verify lint format test clean
 
 help:
 	@echo "Alvos disponíveis:"
@@ -13,6 +13,7 @@ help:
 	@echo "  make verify   - instala o wheel gerado em um ambiente limpo e valida a importação"
 	@echo "  make lint     - executa a análise estática (falha se houver violações)"
 	@echo "  make format   - corrige automaticamente o que for corrigível e formata o código"
+	@echo "  make test     - executa a suíte de testes automatizados"
 	@echo "  make clean    - remove artefatos de build e caches"
 
 $(BIN)/activate:
@@ -27,6 +28,9 @@ install: venv
 lint: install
 	$(BIN)/ruff check .
 	$(BIN)/ruff format --check .
+
+test: install
+	$(BIN)/pytest
 
 format: install
 	$(BIN)/ruff check --fix .
