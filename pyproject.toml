@@ -22,6 +22,7 @@ dev = [
     "build>=1.2",
     "ruff>=0.6",
     "pytest>=8.0",
+    "pytest-cov>=5.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -35,6 +36,24 @@ testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
 markers = [
     "regressao: verifica que um contexto já entregue continua funcionando após mudanças no motor de regras",
+]
+
+[tool.coverage.run]
+source = ["votacao"]
+# branch = true mede também os desvios de condicional, e não apenas as linhas
+# executadas. É o que importa em um motor de regras cheio de ramificações de
+# quórum, peso de voto e critério de vitória.
+branch = true
+
+[tool.coverage.report]
+# Mínimo definido pela equipe: abaixo disso a verificação de cobertura falha.
+fail_under = 80
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
 ]
 
 [tool.ruff]
