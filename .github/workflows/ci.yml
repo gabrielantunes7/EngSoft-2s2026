@@ -51,8 +51,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Executar a suíte de testes
-        run: pytest
+      - name: Executar a suíte de testes com medição de cobertura
+        run: pytest --cov --cov-report=term-missing --cov-report=xml --cov-report=html
+
+      - name: Publicar o resumo da cobertura
+        if: always()
+        run: |
+          {
+            echo "## Cobertura de testes"
+            echo ""
+            echo '```'
+            coverage report --fail-under=0
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publicar o relatório de cobertura
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            htmlcov/
+            coverage.xml
 
   build:
     name: Build

@@ -3,7 +3,7 @@ VENV := .venv
 BIN := $(VENV)/bin
 DIST := dist
 
-.PHONY: help venv install build verify lint format test clean
+.PHONY: help venv install build verify lint format test coverage clean
 
 help:
 	@echo "Alvos disponíveis:"
@@ -14,6 +14,7 @@ help:
 	@echo "  make lint     - executa a análise estática (falha se houver violações)"
 	@echo "  make format   - corrige automaticamente o que for corrigível e formata o código"
 	@echo "  make test     - executa a suíte de testes automatizados"
+	@echo "  make coverage - executa os testes medindo a cobertura e gera os relatórios"
 	@echo "  make clean    - remove artefatos de build e caches"
 
 $(BIN)/activate:
@@ -32,6 +33,10 @@ lint: install
 test: install
 	$(BIN)/pytest
 
+coverage: install
+	$(BIN)/pytest --cov --cov-report=term-missing --cov-report=html --cov-report=xml
+	@echo "Relatório HTML disponível em htmlcov/index.html"
+
 format: install
 	$(BIN)/ruff check --fix .
 	$(BIN)/ruff format .
@@ -49,5 +54,5 @@ verify: build
 
 clean:
 	rm -rf $(DIST) build .verify-venv
-	rm -rf src/*.egg-info
+	rm -rf src/*.egg-info htmlcov coverage.xml .coverage .pytest_cache .ruff_cache
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
