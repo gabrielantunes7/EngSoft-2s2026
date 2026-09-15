@@ -21,10 +21,21 @@ dependencies = []
 dev = [
     "build>=1.2",
     "ruff>=0.6",
+    "pytest>=8.0",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# --strict-markers e --strict-config transformam marcador desconhecido e erro de
+# configuração em falha, evitando que um teste seja silenciosamente ignorado.
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "regressao: verifica que um contexto já entregue continua funcionando após mudanças no motor de regras",
+]
 
 [tool.ruff]
 line-length = 100
