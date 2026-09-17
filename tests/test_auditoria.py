@@ -12,6 +12,7 @@ from itertools import pairwise
 
 import pytest
 
+import votacao
 from votacao.auditoria import HASH_GENESE, LogDeAuditoria, TipoEvento
 from votacao.modelos import Voto
 from votacao.motor import MotorApuracao
@@ -44,6 +45,21 @@ def criar_log_de_eleicao() -> LogDeAuditoria:
         log.registrar_voto(voto)
     log.registrar(TipoEvento.VOTACAO_ENCERRADA)
     return log
+
+
+def test_auditoria_esta_exposta_na_api_do_pacote():
+    nomes = (
+        "HASH_GENESE",
+        "LogDeAuditoria",
+        "RegistroAuditoria",
+        "ResultadoVerificacao",
+        "TipoEvento",
+    )
+
+    assert all(nome in votacao.__all__ for nome in nomes)
+    assert votacao.LogDeAuditoria is LogDeAuditoria
+    assert votacao.HASH_GENESE == HASH_GENESE
+    assert votacao.TipoEvento is TipoEvento
 
 
 def test_auditoria_id_de_votacao_invalido():
@@ -185,6 +201,38 @@ def test_auditoria_copia_os_dados_recebidos():
 
     assert registro.dados == {"cargos": "diretoria"}
     assert log.verificar_integridade().integro is True
+
+
+def test_auditoria_copia_os_dados_recebidos_em_profundidade():
+    log = criar_log()
+    dados = {"chapa": {"nome": "Renova", "cargos": ["presidencia"]}}
+
+    registro = log.registrar(TipoEvento.VOTACAO_ABERTA, dados)
+    dados["chapa"]["nome"] = "Avanca"
+    dados["chapa"]["cargos"].append("tesouraria")
+
+    assert registro.dados == {"chapa": {"nome": "Renova", "cargos": ["presidencia"]}}
+    assert log.verificar_integridade().integro is True
+
+
+def test_auditoria_recusa_dados_nao_serializaveis():
+    log = criar_log()
+
+    # Aceitar o objeto faria o hash incorporar seu endereço de memória, que muda a cada
+    # execução: a cadeia acusaria adulteração ao ser reconferida em outro processo.
+    with pytest.raises(TypeError, match="serializáveis em JSON"):
+        log.registrar(TipoEvento.VOTACAO_ABERTA, {"chapa": object()})
+
+    assert log.registros == ()
+
+
+def test_auditoria_confirma_presenca_do_protocolo_do_eleitor():
+    log = criar_log_de_eleicao()
+    protocolo = log.registros[1].hash
+
+    assert log.contem_protocolo(protocolo) is True
+    assert log.contem_protocolo("f" * 64) is False
+    assert log.contem_protocolo("") is False
 
 
 def test_auditoria_evento_sem_dados_registra_conteudo_vazio():

@@ -3,6 +3,7 @@
 import hashlib
 import json
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -31,7 +32,8 @@ class RegistroAuditoria:
         evento: Tipo do evento registrado.
         id_votacao: Identificador da votação à qual o evento pertence.
         timestamp: Data e hora em que o evento foi registrado.
-        dados: Conteúdo específico do evento. Nunca contém identificação do eleitor.
+        dados: Conteúdo específico do evento, serializável em JSON. Nunca contém
+            identificação do eleitor.
         hash_anterior: Hash do registro imediatamente anterior na cadeia.
         hash: Hash do próprio registro, usado como protocolo e elo do próximo.
     """
@@ -85,8 +87,16 @@ class RegistroAuditoria:
         sempre o mesmo hash. É a comparação entre este valor e o campo `hash` gravado
         que permite detectar adulteração posterior de um registro.
 
+        Tipos fora do JSON são recusados de propósito, em vez de convertidos para texto:
+        a representação padrão de um objeto inclui seu endereço de memória, o que faria
+        o mesmo registro produzir hashes diferentes a cada execução e a cadeia acusar
+        uma adulteração que nunca houve.
+
         Returns:
             Hash SHA-256 hexadecimal do conteúdo do registro.
+
+        Raises:
+            TypeError: Se `dados` contiver valor não serializável em JSON.
         """
         conteudo = json.dumps(
             {
@@ -99,7 +109,6 @@ class RegistroAuditoria:
             },
             sort_keys=True,
             ensure_ascii=False,
-            default=str,
         )
         return hashlib.sha256(conteudo.encode("utf-8")).hexdigest()
 
@@ -167,20 +176,32 @@ class LogDeAuditoria:
 
         Args:
             evento: Tipo do evento a registrar.
-            dados: Conteúdo específico do evento. É copiado, para que alterações
-                posteriores no dicionário de origem não afetem o registro.
+            dados: Conteúdo específico do evento, serializável em JSON. É copiado em
+                profundidade, para que alterações posteriores no dicionário de origem —
+                inclusive em estruturas aninhadas — não corrompam o registro.
 
         Returns:
             O registro criado, cujo hash serve de protocolo.
+
+        Raises:
+            TypeError: Se `dados` contiver valor não serializável em JSON.
         """
-        registro = RegistroAuditoria.criar(
-            indice=len(self._registros),
-            evento=evento,
-            id_votacao=self.id_votacao,
-            timestamp=self._relogio(),
-            dados=dict(dados) if dados is not None else {},
-            hash_anterior=self.ultimo_hash,
-        )
+        try:
+            registro = RegistroAuditoria.criar(
+                indice=len(self._registros),
+                evento=evento,
+                id_votacao=self.id_votacao,
+                timestamp=self._relogio(),
+                dados=deepcopy(dict(dados)) if dados is not None else {},
+                hash_anterior=self.ultimo_hash,
+            )
+        except TypeError as erro:
+            msg = (
+                "Os dados do evento devem ser serializáveis em JSON para que o hash "
+                "do registro seja reprodutível."
+            )
+            raise TypeError(msg) from erro
+
         self._registros.append(registro)
         return registro
 
@@ -257,3 +278,18 @@ class LogDeAuditoria:
             raise ValueError(msg)
 
         return self._registros[indice].hash
+
+    def contem_protocolo(self, protocolo: str) -> bool:
+        """Informa se um protocolo corresponde a algum registro da cadeia.
+
+        É o que permite ao eleitor confirmar que seu voto foi contabilizado: ele guarda
+        apenas o hash devolvido no momento do voto e, com ele, verifica sua presença sem
+        precisar saber a posição do próprio registro — posição que o anonimato não lhe dá.
+
+        Args:
+            protocolo: Hash entregue no momento do registro.
+
+        Returns:
+            True se algum registro da cadeia tem esse hash, False caso contrário.
+        """
+        return any(registro.hash == protocolo for registro in self._registros)
