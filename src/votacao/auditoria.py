@@ -104,6 +104,21 @@ class RegistroAuditoria:
         return hashlib.sha256(conteudo.encode("utf-8")).hexdigest()
 
 
+@dataclass(frozen=True)
+class ResultadoVerificacao:
+    """Veredito da conferência de integridade de uma cadeia de registros.
+
+    Attributes:
+        integro: Indica se a cadeia inteira resistiu à conferência.
+        indice_divergente: Índice do primeiro registro com problema, ou None se íntegra.
+        motivo: Descrição do problema encontrado, ou None se íntegra.
+    """
+
+    integro: bool
+    indice_divergente: int | None = None
+    motivo: str | None = None
+
+
 class LogDeAuditoria:
     """Cadeia de registros de auditoria de uma votação.
 
@@ -186,3 +201,59 @@ class LogDeAuditoria:
             TipoEvento.VOTO_REGISTRADO,
             {"opcao": voto.opcao, "peso": voto.peso},
         )
+
+    def verificar_integridade(self) -> ResultadoVerificacao:
+        """Percorre a cadeia conferindo a posição, o elo e o conteúdo de cada registro.
+
+        A conferência para no primeiro problema encontrado: uma vez quebrada, a cadeia
+        já não sustenta os registros seguintes, e o que interessa à auditoria é onde a
+        quebra começou.
+
+        Returns:
+            Resultado íntegro, ou o índice e o motivo da primeira divergência.
+        """
+        hash_esperado = HASH_GENESE
+
+        for posicao, registro in enumerate(self._registros):
+            if registro.indice != posicao:
+                return ResultadoVerificacao(
+                    integro=False,
+                    indice_divergente=posicao,
+                    motivo="O índice do registro não corresponde à sua posição na cadeia.",
+                )
+
+            if registro.hash_anterior != hash_esperado:
+                return ResultadoVerificacao(
+                    integro=False,
+                    indice_divergente=posicao,
+                    motivo="O elo com o registro anterior foi rompido.",
+                )
+
+            if registro.calcular_hash() != registro.hash:
+                return ResultadoVerificacao(
+                    integro=False,
+                    indice_divergente=posicao,
+                    motivo="O conteúdo do registro não corresponde ao hash gravado.",
+                )
+
+            hash_esperado = registro.hash
+
+        return ResultadoVerificacao(integro=True)
+
+    def comprovante(self, indice: int) -> str:
+        """Devolve o protocolo de um registro, entregue a quem votou.
+
+        Args:
+            indice: Índice do registro na cadeia.
+
+        Returns:
+            Hash do registro, que comprova sua presença na cadeia sem revelar o eleitor.
+
+        Raises:
+            ValueError: Se não houver registro no índice informado.
+        """
+        if not 0 <= indice < len(self._registros):
+            msg = f"Não há registro de auditoria no índice {indice}."
+            raise ValueError(msg)
+
+        return self._registros[indice].hash
