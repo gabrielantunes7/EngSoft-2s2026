@@ -91,3 +91,65 @@ class ResultadoApuracao:
     contagem_por_opcao: dict[str, int] = field(default_factory=dict)
     percentual_vencedor: float | None = None
     detalhes: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Usuario:
+    """Representa um usuário autenticável no sistema.
+
+    Attributes:
+        id: Identificador único (RA, CPF/CNPJ, ID parlamentar).
+        nome: Nome completo do usuário.
+        email: E-mail para notificações e comprovantes.
+        ativo: Indica se o cadastro do usuário está ativo no sistema.
+    """
+
+    id: str
+    nome: str
+    email: str = ""
+    ativo: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.id.strip():
+            msg = "O identificador do usuário não pode ser vazio."
+            raise ValueError(msg)
+        if not self.nome.strip():
+            msg = "O nome do usuário não pode ser vazio."
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True)
+class AptidaoVoto:
+    """Resultado da verificação de aptidão de um eleitor para votar.
+
+    Attributes:
+        apto: Indica se o eleitor cumpre todos os requisitos para votar.
+        peso_voto: Peso unitário (CA/Congresso) ou ponderado por ações (Assembleia).
+        motivo_inaptidao: Descrição da razão caso o eleitor não esteja apto.
+        dados_eleitor: Metadados contextuais adicionais do eleitor.
+    """
+
+    apto: bool
+    peso_voto: int = 1
+    motivo_inaptidao: str | None = None
+    dados_eleitor: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.peso_voto < 0:
+            msg = "O peso do voto não pode ser negativo."
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True)
+class ElegibilidadeCandidato:
+    """Resultado da verificação de elegibilidade de um candidato ou chapa.
+
+    Attributes:
+        elegivel: Indica se o candidato ou chapa atende a todos os critérios.
+        motivo_inelegibilidade: Descrição da causa de inelegibilidade, se houver.
+        detalhes: Informações complementares da validação de requisitos.
+    """
+
+    elegivel: bool
+    motivo_inelegibilidade: str | None = None
+    detalhes: dict[str, Any] = field(default_factory=dict)
