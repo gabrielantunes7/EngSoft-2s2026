@@ -6,6 +6,7 @@ from votacao.dados.assembleia import (
     Procuracao,
     RepositorioAssembleia,
 )
+from votacao.dados.banco_sql import BancoDadosSQL
 from votacao.dados.base import RepositorioBase
 from votacao.dados.ca import ChapaCA, Discente, RepositorioCA
 from votacao.dados.congresso import (
@@ -23,6 +24,7 @@ from votacao.dados.seeds import (
 __all__ = [
     "Acionista",
     "BancoDadosMock",
+    "BancoDadosSQL",
     "CandidatoConselho",
     "ChapaCA",
     "Discente",

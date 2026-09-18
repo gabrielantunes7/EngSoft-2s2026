@@ -19,6 +19,7 @@ def test_pacote_expoe_simbolos_principais():
     simbolos_esperados = [
         "AptidaoVoto",
         "BancoDadosMock",
+        "BancoDadosSQL",
         "CasaLegislativa",
         "ElegibilidadeCandidato",
         "HASH_GENESE",

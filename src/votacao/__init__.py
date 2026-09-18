@@ -7,6 +7,7 @@ from votacao.auditoria import (
     ResultadoVerificacao,
     TipoEvento,
 )
+from votacao.dados.banco_sql import BancoDadosSQL
 from votacao.dados.seeds import BancoDadosMock
 from votacao.elegibilidade.validador_assembleia import (
     ValidadorElegibilidadeAssembleia,
@@ -39,6 +40,7 @@ __all__ = [
     "HASH_GENESE",
     "AptidaoVoto",
     "BancoDadosMock",
+    "BancoDadosSQL",
     "CasaLegislativa",
     "ElegibilidadeCandidato",
     "LogDeAuditoria",

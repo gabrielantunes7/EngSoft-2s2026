@@ -330,22 +330,39 @@ def carregar_dados_padrao_congresso(
 
 
 class BancoDadosMock:
-    """Contêiner que agrega repositórios mockados para todos os domínios."""
+    """Contêiner que agrega repositórios mockados e banco relacional SQL para todos os domínios."""
 
-    def __init__(self, popular: bool = True) -> None:
+    def __init__(self, popular: bool = True, usar_sql: bool = False) -> None:
+        from votacao.dados.banco_sql import BancoDadosSQL
+
         self.ca = RepositorioCA()
         self.assembleia = RepositorioAssembleia()
         self.congresso = RepositorioCongresso()
+        self.banco_sql = BancoDadosSQL()
+        self.banco_sql.inicializar_schema()
+        self.banco_sql.carregar_seeds()
 
         if popular:
-            self.recarregar_dados_padrao()
+            if usar_sql:
+                self.recarregar_dados_do_sql()
+            else:
+                self.recarregar_dados_padrao()
 
     def recarregar_dados_padrao(self) -> None:
-        """Limpa e reinsere os dados simulados padrão em todos os repositórios."""
+        """Limpa e reinsere os dados simulados padrão em todos os repositórios via código."""
         self.limpar_todos()
         carregar_dados_padrao_ca(self.ca)
         carregar_dados_padrao_assembleia(self.assembleia)
         carregar_dados_padrao_congresso(self.congresso)
+
+    def recarregar_dados_do_sql(self) -> None:
+        """Limpa e popula os repositórios lendo diretamente das tabelas SQL relacionais."""
+        self.limpar_todos()
+        self.banco_sql.carregar_repositorios_a_partir_do_sql(
+            repo_ca=self.ca,
+            repo_assembleia=self.assembleia,
+            repo_congresso=self.congresso,
+        )
 
     def limpar_todos(self) -> None:
         """Esvazia todos os repositórios gerenciados."""
