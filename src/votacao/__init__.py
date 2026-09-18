@@ -1,5 +1,12 @@
 """Sistema de votação digital com motor de regras extensível."""
 
+from votacao.auditoria import (
+    HASH_GENESE,
+    LogDeAuditoria,
+    RegistroAuditoria,
+    ResultadoVerificacao,
+    TipoEvento,
+)
 from votacao.dados.seeds import BancoDadosMock
 from votacao.elegibilidade.validador_assembleia import (
     ValidadorElegibilidadeAssembleia,
@@ -29,19 +36,24 @@ from votacao.servicos import ServicoElegibilidade
 __version__ = "0.1.0"
 
 __all__ = [
+    "HASH_GENESE",
     "AptidaoVoto",
     "BancoDadosMock",
     "CasaLegislativa",
     "ElegibilidadeCandidato",
+    "LogDeAuditoria",
     "MotorApuracao",
+    "RegistroAuditoria",
     "RegraAssembleia",
     "RegraCA",
     "RegraCongresso",
     "RegraDeVotacao",
     "ResultadoApuracao",
+    "ResultadoVerificacao",
     "ServicoElegibilidade",
     "StatusResultado",
     "TipoDecisaoAssembleia",
+    "TipoEvento",
     "TipoMateriaCongresso",
     "Usuario",
     "ValidadorElegibilidadeAssembleia",
