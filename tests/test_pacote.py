@@ -13,3 +13,37 @@ def test_pacote_expoe_versao_semantica():
 
     assert len(partes) == 3, "a versão deve seguir o formato maior.menor.correcao"
     assert all(parte.isdigit() for parte in partes)
+
+
+def test_pacote_expoe_simbolos_principais():
+    simbolos_esperados = [
+        "AptidaoVoto",
+        "BancoDadosMock",
+        "BancoDadosSQL",
+        "CasaLegislativa",
+        "ElegibilidadeCandidato",
+        "HASH_GENESE",
+        "LogDeAuditoria",
+        "MotorApuracao",
+        "RegistroAuditoria",
+        "RegraAssembleia",
+        "RegraCA",
+        "RegraCongresso",
+        "RegraDeVotacao",
+        "ResultadoApuracao",
+        "ResultadoVerificacao",
+        "ServicoElegibilidade",
+        "StatusResultado",
+        "TipoDecisaoAssembleia",
+        "TipoEvento",
+        "TipoMateriaCongresso",
+        "Usuario",
+        "ValidadorElegibilidadeAssembleia",
+        "ValidadorElegibilidadeCA",
+        "ValidadorElegibilidadeCongresso",
+        "Voto",
+        "__version__",
+    ]
+    for simbolo in simbolos_esperados:
+        assert hasattr(votacao, simbolo), f"Símbolo '{simbolo}' não encontrado em votacao."
+    assert set(votacao.__all__) == set(simbolos_esperados)
