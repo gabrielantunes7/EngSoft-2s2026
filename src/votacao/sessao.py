@@ -3,7 +3,9 @@
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Any
 
+from votacao.auditoria import LogDeAuditoria, TipoEvento
 from votacao.modelos import ResultadoApuracao, Voto
 from votacao.motor import MotorApuracao
 from votacao.regras.base import RegraDeVotacao
@@ -40,10 +42,15 @@ class SessaoVotacao:
     de votação quando ela é definida, e no máximo um por eleitor. A apuração só
     acontece depois que a urna foi fechada.
 
+    Quando a sessão recebe um `LogDeAuditoria`, cada transição e cada voto aceito
+    geram um registro na cadeia, e o eleitor recebe o hash do seu registro como
+    comprovante.
+
     Attributes:
         id_sessao: Identificador da sessão.
         regra: Estratégia de quórum e apuração aplicada aos votos.
         total_aptos: Total de eleitores aptos ou de capital social votante.
+        log: Log de auditoria da sessão, ou None para uma sessão sem auditoria.
     """
 
     def __init__(
@@ -51,6 +58,7 @@ class SessaoVotacao:
         id_sessao: str,
         regra: RegraDeVotacao,
         total_aptos: int = 0,
+        log: LogDeAuditoria | None = None,
         relogio: Callable[[], datetime] | None = None,
     ) -> None:
         """Cria a sessão no estado CRIADA.
@@ -59,12 +67,15 @@ class SessaoVotacao:
             id_sessao: Identificador da sessão.
             regra: Estratégia de votação que implementa RegraDeVotacao.
             total_aptos: Total de aptos (CA/Congresso) ou capital social (Assembleia).
+            log: Log de auditoria no qual o ciclo da sessão é registrado. Precisa ter
+                sido criado para esta mesma votação.
             relogio: Função que devolve o instante corrente, usada para aplicar a
                 janela de votação. O padrão é a hora corrente em UTC; injetar outra
                 torna a trava temporal determinística nos testes.
 
         Raises:
-            ValueError: Se o identificador for vazio ou o total de aptos for negativo.
+            ValueError: Se o identificador for vazio, o total de aptos for negativo ou
+                o log pertencer a outra votação.
             TypeError: Se a regra não implementar RegraDeVotacao.
         """
         if not id_sessao.strip():
@@ -76,10 +87,17 @@ class SessaoVotacao:
         if total_aptos < 0:
             msg = "O total de aptos não pode ser negativo."
             raise ValueError(msg)
+        if log is not None and log.id_votacao != id_sessao:
+            msg = (
+                f"O log de auditoria pertence à votação '{log.id_votacao}', "
+                f"não à sessão '{id_sessao}'."
+            )
+            raise ValueError(msg)
 
         self.id_sessao = id_sessao
         self.regra = regra
         self.total_aptos = total_aptos
+        self.log = log
         self._relogio = relogio if relogio is not None else lambda: datetime.now(UTC)
         self._estado = EstadoSessao.CRIADA
         self._inicio_votacao: datetime | None = None
@@ -139,16 +157,29 @@ class SessaoVotacao:
         self._transitar(de=EstadoSessao.ABERTA, para=EstadoSessao.EM_VOTACAO)
         self._inicio_votacao = inicio
         self._fim_votacao = fim
+        self._auditar(
+            TipoEvento.VOTACAO_ABERTA,
+            {
+                "inicio": inicio.isoformat() if inicio is not None else None,
+                "fim": fim.isoformat() if fim is not None else None,
+                "total_aptos": self.total_aptos,
+            },
+        )
 
     def encerrar_votacao(self) -> None:
         """Fecha a urna (EM_VOTACAO → EM_APURACAO)."""
         self._transitar(de=EstadoSessao.EM_VOTACAO, para=EstadoSessao.EM_APURACAO)
+        self._auditar(TipoEvento.VOTACAO_ENCERRADA, {"total_votos": len(self._votos)})
 
-    def registrar_voto(self, voto: Voto) -> None:
+    def registrar_voto(self, voto: Voto) -> str | None:
         """Aceita um voto, somente com a urna aberta, dentro da janela e uma vez por eleitor.
 
         Args:
             voto: Voto já autorizado pelo serviço de elegibilidade.
+
+        Returns:
+            O protocolo do registro de auditoria, que serve de comprovante ao eleitor,
+            ou None se a sessão não tem log.
 
         Raises:
             TransicaoInvalidaError: Se a sessão não estiver em EM_VOTACAO.
@@ -166,6 +197,10 @@ class SessaoVotacao:
         self._eleitores.add(identidade)
         self._votos.append(voto)
 
+        if self.log is None:
+            return None
+        return self.log.registrar_voto(voto).hash
+
     def apurar(self) -> ResultadoApuracao:
         """Apura os votos com a regra da sessão (EM_APURACAO → ENCERRADA).
 
@@ -176,13 +211,25 @@ class SessaoVotacao:
             TransicaoInvalidaError: Se a urna ainda não foi fechada ou a sessão já foi apurada.
         """
         self._exigir_estado(EstadoSessao.EM_APURACAO, operacao="apurar")
-        self._resultado = MotorApuracao.apurar(
+        resultado = MotorApuracao.apurar(
             votos=self._votos,
             regra=self.regra,
             total_aptos_ou_capital=self.total_aptos,
         )
+        self._resultado = resultado
         self._estado = EstadoSessao.ENCERRADA
-        return self._resultado
+        self._auditar(
+            TipoEvento.RESULTADO_PROCLAMADO,
+            {
+                "status": resultado.status.value,
+                "vencedor_ou_decisao": resultado.vencedor_ou_decisao,
+                "quorum_atingido": resultado.quorum_atingido,
+                "total_votantes": resultado.total_votantes,
+                "total_peso_apurado": resultado.total_peso_apurado,
+                "contagem_por_opcao": dict(resultado.contagem_por_opcao),
+            },
+        )
+        return resultado
 
     def _transitar(self, de: EstadoSessao, para: EstadoSessao) -> None:
         self._exigir_estado(de, operacao=f"passar a {para.value}")
@@ -213,6 +260,10 @@ class SessaoVotacao:
                 f"{self._fim_votacao.isoformat()}."
             )
             raise VotoRecusadoError(msg)
+
+    def _auditar(self, evento: TipoEvento, dados: dict[str, Any]) -> None:
+        if self.log is not None:
+            self.log.registrar(evento, dados)
 
     @staticmethod
     def _identidade(voto: Voto) -> str:

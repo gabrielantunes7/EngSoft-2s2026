@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from votacao.auditoria import LogDeAuditoria, TipoEvento
 from votacao.modelos import StatusResultado, Voto
 from votacao.regras.ca import RegraCA
 from votacao.sessao import (
@@ -50,12 +51,14 @@ class RelogioControlado:
 def _nova_sessao(
     regra: RegraCA | None = None,
     total_aptos: int = 0,
+    log: LogDeAuditoria | None = None,
     relogio: RelogioControlado | None = None,
 ) -> SessaoVotacao:
     return SessaoVotacao(
         "CA-2026",
         regra if regra is not None else RegraCA(),
         total_aptos,
+        log=log,
         relogio=relogio,
     )
 
@@ -281,3 +284,91 @@ def test_sessao_janela_apenas_com_fim_usa_relogio_utc_por_padrao():
         sessao.registrar_voto(Voto(eleitor_id="101", opcao="Chapa A"))
 
     assert sessao.votos == ()
+
+
+def test_sessao_recusa_log_de_outra_votacao():
+    with pytest.raises(ValueError, match="pertence à votação 'OUTRA'"):
+        _nova_sessao(log=LogDeAuditoria("OUTRA"))
+
+
+def test_sessao_sem_log_nao_emite_comprovante():
+    sessao = _nova_sessao()
+    _avancar_ate(sessao, EstadoSessao.EM_VOTACAO)
+
+    assert sessao.registrar_voto(Voto(eleitor_id="101", opcao="Chapa A")) is None
+
+
+def test_sessao_emite_comprovante_verificavel_sem_expor_o_eleitor():
+    log = LogDeAuditoria("CA-2026")
+    sessao = _nova_sessao(log=log)
+    _avancar_ate(sessao, EstadoSessao.EM_VOTACAO)
+
+    protocolo = sessao.registrar_voto(Voto(eleitor_id="101", opcao="Chapa A"))
+
+    assert protocolo is not None
+    assert log.contem_protocolo(protocolo)
+    registro = next(r for r in log.registros if r.hash == protocolo)
+    assert registro.evento == TipoEvento.VOTO_REGISTRADO
+    assert registro.dados == {"opcao": "Chapa A", "peso": 1}
+    assert "101" not in str(registro.dados)
+
+
+def test_sessao_voto_recusado_nao_entra_no_log():
+    log = LogDeAuditoria("CA-2026")
+    sessao = _nova_sessao(log=log)
+    _avancar_ate(sessao, EstadoSessao.EM_VOTACAO)
+    sessao.registrar_voto(Voto(eleitor_id="101", opcao="Chapa A"))
+    registros_antes = len(log.registros)
+
+    with pytest.raises(VotoRecusadoError):
+        sessao.registrar_voto(Voto(eleitor_id="101", opcao="Chapa B"))
+
+    assert len(log.registros) == registros_antes
+
+
+def test_sessao_registra_a_janela_na_abertura_da_urna():
+    log = LogDeAuditoria("CA-2026")
+    sessao = _nova_sessao(log=log, total_aptos=10)
+    sessao.abrir()
+
+    sessao.liberar_votacao(inicio=INICIO, fim=FIM)
+
+    abertura = log.registros[-1]
+    assert abertura.evento == TipoEvento.VOTACAO_ABERTA
+    assert abertura.dados == {
+        "inicio": INICIO.isoformat(),
+        "fim": FIM.isoformat(),
+        "total_aptos": 10,
+    }
+
+
+def test_sessao_registra_o_ciclo_completo_no_log():
+    log = LogDeAuditoria("CA-2026")
+    sessao = _nova_sessao(regra=RegraCA(quorum_minimo_votantes=2), log=log, total_aptos=5)
+    sessao.abrir()
+    sessao.liberar_votacao()
+    sessao.registrar_voto(Voto(eleitor_id="101", opcao="Chapa A"))
+    sessao.registrar_voto(Voto(eleitor_id="102", opcao="Chapa A"))
+    sessao.registrar_voto(Voto(eleitor_id="103", opcao="Chapa B"))
+    sessao.encerrar_votacao()
+    resultado = sessao.apurar()
+
+    eventos = [registro.evento for registro in log.registros]
+    assert eventos == [
+        TipoEvento.VOTACAO_ABERTA,
+        TipoEvento.VOTO_REGISTRADO,
+        TipoEvento.VOTO_REGISTRADO,
+        TipoEvento.VOTO_REGISTRADO,
+        TipoEvento.VOTACAO_ENCERRADA,
+        TipoEvento.RESULTADO_PROCLAMADO,
+    ]
+
+    encerramento = log.registros[-2]
+    assert encerramento.dados == {"total_votos": 3}
+
+    proclamacao = log.registros[-1]
+    assert proclamacao.dados["status"] == StatusResultado.ELEITO.value
+    assert proclamacao.dados["vencedor_ou_decisao"] == "CHAPA A"
+    assert proclamacao.dados["contagem_por_opcao"] == resultado.contagem_por_opcao
+
+    assert log.verificar_integridade().integro
