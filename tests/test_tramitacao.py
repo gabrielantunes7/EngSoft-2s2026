@@ -3,6 +3,8 @@
 import pytest
 
 from votacao.auditoria import LogDeAuditoria, TipoEvento
+from votacao.dados.congresso import MateriaLegislativa, RepositorioCongresso
+from votacao.elegibilidade.validador_congresso import ValidadorElegibilidadeCongresso
 from votacao.modelos import CasaLegislativa, StatusResultado, TipoMateriaCongresso, Voto
 from votacao.regras.congresso import RegraCongresso
 from votacao.sessao import EstadoSessao, SessaoVotacao
@@ -246,3 +248,137 @@ def test_tramitacao_recusa_registrar_a_mesma_sessao_duas_vezes():
 
     assert tramitacao.turno_atual == 2
     assert len(tramitacao.historico) == 1
+
+
+def _repo_com(materia: MateriaLegislativa) -> RepositorioCongresso:
+    repo = RepositorioCongresso()
+    repo.adicionar_materia(materia)
+    return repo
+
+
+def _pl_na_camara(**ajustes) -> MateriaLegislativa:
+    campos = {
+        "id": "PL-101/2026",
+        "tipo": TipoMateriaCongresso.LEI_ORDINARIA,
+        "casa_atual": CasaLegislativa.CAMARA,
+        "titulo": "Projeto de teste",
+        "ativa": True,
+    }
+    campos.update(ajustes)
+    return MateriaLegislativa(**campos)
+
+
+def test_tramitacao_recusa_materia_ausente_do_repositorio():
+    with pytest.raises(ValueError, match="não está cadastrada"):
+        TramitacaoLegislativa(
+            "PL-404/2026", TipoMateriaCongresso.LEI_ORDINARIA, repo=RepositorioCongresso()
+        )
+
+
+def test_tramitacao_recusa_materia_arquivada():
+    repo = _repo_com(_pl_na_camara(ativa=False))
+
+    with pytest.raises(ValueError, match="arquivada"):
+        TramitacaoLegislativa("PL-101/2026", TipoMateriaCongresso.LEI_ORDINARIA, repo=repo)
+
+
+def test_tramitacao_recusa_tipo_divergente_do_cadastro():
+    repo = _repo_com(_pl_na_camara())
+
+    with pytest.raises(ValueError, match="cadastrada como LEI_ORDINARIA"):
+        TramitacaoLegislativa("PL-101/2026", TipoMateriaCongresso.PEC, repo=repo)
+
+
+def test_tramitacao_recusa_casa_iniciadora_divergente_do_cadastro():
+    repo = _repo_com(_pl_na_camara(casa_atual=CasaLegislativa.SENADO))
+
+    with pytest.raises(ValueError, match="pautada na SENADO"):
+        TramitacaoLegislativa("PL-101/2026", TipoMateriaCongresso.LEI_ORDINARIA, repo=repo)
+
+
+def test_tramitacao_move_a_materia_para_a_casa_revisora_no_repositorio():
+    repo = _repo_com(_pl_na_camara())
+    tramitacao = TramitacaoLegislativa("PL-101/2026", TipoMateriaCongresso.LEI_ORDINARIA, repo=repo)
+    validador = ValidadorElegibilidadeCongresso()
+    assert validador.validar_materia("PL-101/2026", CasaLegislativa.CAMARA, repo).elegivel
+
+    _aprovar(tramitacao)
+
+    materia = repo.obter_materia("PL-101/2026")
+    assert materia is not None
+    assert materia.casa_atual == CasaLegislativa.SENADO
+    assert materia.ativa is True
+    assert materia.titulo == "Projeto de teste"
+    assert validador.validar_materia("PL-101/2026", CasaLegislativa.SENADO, repo).elegivel
+    recusa = validador.validar_materia("PL-101/2026", CasaLegislativa.CAMARA, repo)
+    assert recusa.elegivel is False
+    assert "SENADO" in (recusa.motivo_inelegibilidade or "")
+
+
+def test_tramitacao_pec_so_muda_de_casa_no_repositorio_apos_os_dois_turnos():
+    repo = _repo_com(_pl_na_camara(id="PEC-50/2026", tipo=TipoMateriaCongresso.PEC))
+    tramitacao = TramitacaoLegislativa("PEC-50/2026", TipoMateriaCongresso.PEC, repo=repo)
+
+    _aprovar(tramitacao)
+    materia = repo.obter_materia("PEC-50/2026")
+    assert materia is not None
+    assert materia.casa_atual == CasaLegislativa.CAMARA
+
+    _aprovar(tramitacao)
+    materia = repo.obter_materia("PEC-50/2026")
+    assert materia is not None
+    assert materia.casa_atual == CasaLegislativa.SENADO
+
+
+def test_tramitacao_aprovada_arquiva_a_materia_no_repositorio():
+    repo = _repo_com(_pl_na_camara())
+    tramitacao = TramitacaoLegislativa("PL-101/2026", TipoMateriaCongresso.LEI_ORDINARIA, repo=repo)
+
+    _aprovar(tramitacao)
+    _, status = _aprovar(tramitacao)
+
+    assert status == StatusTramitacao.APROVADA
+    materia = repo.obter_materia("PL-101/2026")
+    assert materia is not None
+    assert materia.ativa is False
+    recusa = ValidadorElegibilidadeCongresso().validar_materia(
+        "PL-101/2026", CasaLegislativa.SENADO, repo
+    )
+    assert recusa.elegivel is False
+
+
+def test_tramitacao_rejeitada_arquiva_a_materia_no_repositorio():
+    repo = _repo_com(_pl_na_camara())
+    tramitacao = TramitacaoLegislativa("PL-101/2026", TipoMateriaCongresso.LEI_ORDINARIA, repo=repo)
+
+    _, status = _rejeitar(tramitacao)
+
+    assert status == StatusTramitacao.REJEITADA
+    materia = repo.obter_materia("PL-101/2026")
+    assert materia is not None
+    assert materia.ativa is False
+    assert materia.casa_atual == CasaLegislativa.CAMARA
+
+
+def test_tramitacao_sem_repositorio_nao_toca_em_cadastro_algum():
+    repo = _repo_com(_pl_na_camara())
+    tramitacao = TramitacaoLegislativa("PL-101/2026", TipoMateriaCongresso.LEI_ORDINARIA)
+
+    _aprovar(tramitacao)
+    _aprovar(tramitacao)
+
+    materia = repo.obter_materia("PL-101/2026")
+    assert materia is not None
+    assert materia.casa_atual == CasaLegislativa.CAMARA
+    assert materia.ativa is True
+
+
+def test_tramitacao_ignora_materia_removida_do_repositorio_apos_o_inicio():
+    repo = _repo_com(_pl_na_camara())
+    tramitacao = TramitacaoLegislativa("PL-101/2026", TipoMateriaCongresso.LEI_ORDINARIA, repo=repo)
+    repo.limpar()
+
+    _aprovar(tramitacao)
+
+    assert tramitacao.casa_atual == CasaLegislativa.SENADO
+    assert repo.obter_materia("PL-101/2026") is None

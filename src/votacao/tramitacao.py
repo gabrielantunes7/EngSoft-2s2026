@@ -1,12 +1,13 @@
 """Tramitação de matérias legislativas entre as Casas do Congresso Nacional."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 from typing import ClassVar
 
 from votacao.auditoria import LogDeAuditoria
+from votacao.dados.congresso import RepositorioCongresso
 from votacao.modelos import (
     CasaLegislativa,
     ResultadoApuracao,
@@ -57,10 +58,16 @@ class TramitacaoLegislativa:
     sessão encerrada, a tramitação avança para o próximo turno, para a Casa revisora
     ou para a conclusão, conforme o rito exigido pelo tipo de matéria.
 
+    Quando recebe um `RepositorioCongresso`, mantém a `MateriaLegislativa` cadastrada
+    coerente com o rito: `casa_atual` acompanha a Casa em que a matéria se encontra e
+    `ativa` passa a False na conclusão. É o que permite ao validador de elegibilidade
+    aceitar os parlamentares da Casa revisora e recusar votos em matéria concluída.
+
     Attributes:
         materia_id: Identificador oficial da matéria (ex.: 'PEC-50/2026').
         tipo: Tipo da matéria, que determina o número de turnos por Casa.
         casa_iniciadora: Casa em que a matéria começa a tramitar.
+        repo: Repositório em que a matéria está cadastrada, ou None.
     """
 
     TURNOS_POR_MATERIA: ClassVar[dict[TipoMateriaCongresso, int]] = {
@@ -74,6 +81,7 @@ class TramitacaoLegislativa:
         materia_id: str,
         tipo: TipoMateriaCongresso,
         casa_iniciadora: CasaLegislativa = CasaLegislativa.CAMARA,
+        repo: RepositorioCongresso | None = None,
     ) -> None:
         """Inicia a tramitação no primeiro turno da Casa iniciadora.
 
@@ -81,9 +89,13 @@ class TramitacaoLegislativa:
             materia_id: Identificador oficial da matéria.
             tipo: Tipo da matéria legislativa.
             casa_iniciadora: Casa em que a matéria começa a tramitar.
+            repo: Repositório com o cadastro da matéria. Quando informado, a matéria
+                precisa existir, estar ativa, ter o mesmo tipo e estar pautada na
+                Casa iniciadora.
 
         Raises:
-            ValueError: Se o identificador da matéria for vazio.
+            ValueError: Se o identificador da matéria for vazio ou se o cadastro no
+                repositório divergir dos parâmetros informados.
         """
         if not materia_id.strip():
             msg = "O identificador da matéria não pode ser vazio."
@@ -92,11 +104,15 @@ class TramitacaoLegislativa:
         self.materia_id = materia_id
         self.tipo = tipo
         self.casa_iniciadora = casa_iniciadora
+        self.repo = repo
         self._casa_atual = casa_iniciadora
         self._turno_atual = 1
         self._status = StatusTramitacao.EM_TRAMITACAO
         self._historico: list[RegistroTramitacao] = []
         self._sessao_convocada: SessaoVotacao | None = None
+
+        if repo is not None:
+            self._conferir_cadastro(repo)
 
     @property
     def status(self) -> StatusTramitacao:
@@ -221,6 +237,7 @@ class TramitacaoLegislativa:
             return self._status
         if resultado.status == StatusResultado.REJEITADO:
             self._status = StatusTramitacao.REJEITADA
+            self._sincronizar_cadastro(ativa=False)
             return self._status
 
         self._avancar()
@@ -232,8 +249,10 @@ class TramitacaoLegislativa:
         elif self._casa_atual == self.casa_iniciadora:
             self._casa_atual = self.casa_revisora
             self._turno_atual = 1
+            self._sincronizar_cadastro(casa_atual=self._casa_atual)
         else:
             self._status = StatusTramitacao.APROVADA
+            self._sincronizar_cadastro(ativa=False)
 
     def _exigir_em_tramitacao(self, operacao: str) -> None:
         if self._status != StatusTramitacao.EM_TRAMITACAO:
@@ -242,3 +261,41 @@ class TramitacaoLegislativa:
                 f"já foi concluída com situação {self._status.value}."
             )
             raise TramitacaoInvalidaError(msg)
+
+    def _conferir_cadastro(self, repo: RepositorioCongresso) -> None:
+        materia = repo.obter_materia(self.materia_id)
+        if materia is None:
+            msg = f"A matéria '{self.materia_id}' não está cadastrada no repositório."
+            raise ValueError(msg)
+        if not materia.ativa:
+            msg = f"A matéria '{self.materia_id}' está arquivada e não pode tramitar."
+            raise ValueError(msg)
+        if materia.tipo != self.tipo:
+            msg = (
+                f"A matéria '{self.materia_id}' está cadastrada como {materia.tipo.value}, "
+                f"não como {self.tipo.value}."
+            )
+            raise ValueError(msg)
+        if materia.casa_atual != self.casa_iniciadora:
+            msg = (
+                f"A matéria '{self.materia_id}' está pautada na {materia.casa_atual.value}, "
+                f"não na Casa iniciadora informada ({self.casa_iniciadora.value})."
+            )
+            raise ValueError(msg)
+
+    def _sincronizar_cadastro(
+        self,
+        casa_atual: CasaLegislativa | None = None,
+        ativa: bool | None = None,
+    ) -> None:
+        if self.repo is None:
+            return
+        materia = self.repo.obter_materia(self.materia_id)
+        if materia is None:
+            return
+        alteracoes: dict[str, CasaLegislativa | bool] = {}
+        if casa_atual is not None:
+            alteracoes["casa_atual"] = casa_atual
+        if ativa is not None:
+            alteracoes["ativa"] = ativa
+        self.repo.adicionar_materia(replace(materia, **alteracoes))
