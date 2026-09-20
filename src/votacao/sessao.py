@@ -1,10 +1,17 @@
 """Ciclo de vida de uma sessão de votação."""
 
+from collections.abc import Callable
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from votacao.modelos import ResultadoApuracao, Voto
 from votacao.motor import MotorApuracao
 from votacao.regras.base import RegraDeVotacao
+
+# Separador que o ServicoElegibilidade usa para marcar voto por procuração:
+# "<outorgante>#rep:<procurador>". Para fins de duplicata, a identidade do
+# voto é a do outorgante, votando ele próprio ou por procurador.
+SEPARADOR_PROCURACAO = "#rep:"
 
 
 class EstadoSessao(StrEnum):
@@ -21,11 +28,16 @@ class TransicaoInvalidaError(Exception):
     """Operação incompatível com o estado atual da sessão."""
 
 
+class VotoRecusadoError(Exception):
+    """Voto inadmissível: o eleitor já votou ou a janela de votação não está aberta."""
+
+
 class SessaoVotacao:
     """Sessão de votação controlada por uma máquina de estados.
 
     A sessão percorre CRIADA → ABERTA → EM_VOTACAO → EM_APURACAO → ENCERRADA, sempre
-    nessa ordem e sem retorno. Votos só são aceitos em EM_VOTACAO, e a apuração só
+    nessa ordem e sem retorno. Votos só são aceitos em EM_VOTACAO, dentro da janela
+    de votação quando ela é definida, e no máximo um por eleitor. A apuração só
     acontece depois que a urna foi fechada.
 
     Attributes:
@@ -34,13 +46,22 @@ class SessaoVotacao:
         total_aptos: Total de eleitores aptos ou de capital social votante.
     """
 
-    def __init__(self, id_sessao: str, regra: RegraDeVotacao, total_aptos: int = 0) -> None:
+    def __init__(
+        self,
+        id_sessao: str,
+        regra: RegraDeVotacao,
+        total_aptos: int = 0,
+        relogio: Callable[[], datetime] | None = None,
+    ) -> None:
         """Cria a sessão no estado CRIADA.
 
         Args:
             id_sessao: Identificador da sessão.
             regra: Estratégia de votação que implementa RegraDeVotacao.
             total_aptos: Total de aptos (CA/Congresso) ou capital social (Assembleia).
+            relogio: Função que devolve o instante corrente, usada para aplicar a
+                janela de votação. O padrão é a hora corrente em UTC; injetar outra
+                torna a trava temporal determinística nos testes.
 
         Raises:
             ValueError: Se o identificador for vazio ou o total de aptos for negativo.
@@ -59,7 +80,11 @@ class SessaoVotacao:
         self.id_sessao = id_sessao
         self.regra = regra
         self.total_aptos = total_aptos
+        self._relogio = relogio if relogio is not None else lambda: datetime.now(UTC)
         self._estado = EstadoSessao.CRIADA
+        self._inicio_votacao: datetime | None = None
+        self._fim_votacao: datetime | None = None
+        self._eleitores: set[str] = set()
         self._votos: list[Voto] = []
         self._resultado: ResultadoApuracao | None = None
 
@@ -67,6 +92,16 @@ class SessaoVotacao:
     def estado(self) -> EstadoSessao:
         """Etapa atual da sessão."""
         return self._estado
+
+    @property
+    def inicio_votacao(self) -> datetime | None:
+        """Instante a partir do qual a urna aceita votos, ou None se não houver limite."""
+        return self._inicio_votacao
+
+    @property
+    def fim_votacao(self) -> datetime | None:
+        """Instante até o qual a urna aceita votos, ou None se não houver limite."""
+        return self._fim_votacao
 
     @property
     def votos(self) -> tuple[Voto, ...]:
@@ -82,24 +117,53 @@ class SessaoVotacao:
         """Instala a sessão (CRIADA → ABERTA)."""
         self._transitar(de=EstadoSessao.CRIADA, para=EstadoSessao.ABERTA)
 
-    def liberar_votacao(self) -> None:
-        """Abre a urna para receber votos (ABERTA → EM_VOTACAO)."""
+    def liberar_votacao(
+        self,
+        inicio: datetime | None = None,
+        fim: datetime | None = None,
+    ) -> None:
+        """Abre a urna para receber votos (ABERTA → EM_VOTACAO).
+
+        Args:
+            inicio: Instante a partir do qual votos são aceitos. None libera de imediato.
+            fim: Instante até o qual votos são aceitos. None não impõe limite.
+
+        Raises:
+            ValueError: Se o início for posterior ao fim.
+            TransicaoInvalidaError: Se a sessão não estiver em ABERTA.
+        """
+        if inicio is not None and fim is not None and inicio > fim:
+            msg = "O início da janela de votação não pode ser posterior ao fim."
+            raise ValueError(msg)
+
         self._transitar(de=EstadoSessao.ABERTA, para=EstadoSessao.EM_VOTACAO)
+        self._inicio_votacao = inicio
+        self._fim_votacao = fim
 
     def encerrar_votacao(self) -> None:
         """Fecha a urna (EM_VOTACAO → EM_APURACAO)."""
         self._transitar(de=EstadoSessao.EM_VOTACAO, para=EstadoSessao.EM_APURACAO)
 
     def registrar_voto(self, voto: Voto) -> None:
-        """Aceita um voto, somente enquanto a urna estiver aberta.
+        """Aceita um voto, somente com a urna aberta, dentro da janela e uma vez por eleitor.
 
         Args:
             voto: Voto já autorizado pelo serviço de elegibilidade.
 
         Raises:
             TransicaoInvalidaError: Se a sessão não estiver em EM_VOTACAO.
+            VotoRecusadoError: Se o relógio estiver fora da janela de votação ou se o
+                eleitor — diretamente ou por procurador — já tiver votado nesta sessão.
         """
         self._exigir_estado(EstadoSessao.EM_VOTACAO, operacao="registrar voto")
+        self._exigir_dentro_da_janela()
+
+        identidade = self._identidade(voto)
+        if identidade in self._eleitores:
+            msg = f"O eleitor '{identidade}' já votou na sessão '{self.id_sessao}'."
+            raise VotoRecusadoError(msg)
+
+        self._eleitores.add(identidade)
         self._votos.append(voto)
 
     def apurar(self) -> ResultadoApuracao:
@@ -131,3 +195,25 @@ class SessaoVotacao:
                 f"estado atual é {self._estado.value}, esperado {esperado.value}."
             )
             raise TransicaoInvalidaError(msg)
+
+    def _exigir_dentro_da_janela(self) -> None:
+        if self._inicio_votacao is None and self._fim_votacao is None:
+            return
+
+        agora = self._relogio()
+        if self._inicio_votacao is not None and agora < self._inicio_votacao:
+            msg = (
+                f"A votação da sessão '{self.id_sessao}' só começa em "
+                f"{self._inicio_votacao.isoformat()}."
+            )
+            raise VotoRecusadoError(msg)
+        if self._fim_votacao is not None and agora > self._fim_votacao:
+            msg = (
+                f"A votação da sessão '{self.id_sessao}' terminou em "
+                f"{self._fim_votacao.isoformat()}."
+            )
+            raise VotoRecusadoError(msg)
+
+    @staticmethod
+    def _identidade(voto: Voto) -> str:
+        return voto.eleitor_id.split(SEPARADOR_PROCURACAO, 1)[0]

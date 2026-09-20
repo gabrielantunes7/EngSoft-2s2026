@@ -1,10 +1,17 @@
 """Testes da máquina de estados da sessão de votação."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from votacao.modelos import StatusResultado, Voto
 from votacao.regras.ca import RegraCA
-from votacao.sessao import EstadoSessao, SessaoVotacao, TransicaoInvalidaError
+from votacao.sessao import (
+    EstadoSessao,
+    SessaoVotacao,
+    TransicaoInvalidaError,
+    VotoRecusadoError,
+)
 
 CICLO = (
     EstadoSessao.CRIADA,
@@ -26,8 +33,31 @@ TRANSICOES_VALIDAS = {
 }
 
 
-def _nova_sessao(regra: RegraCA | None = None, total_aptos: int = 0) -> SessaoVotacao:
-    return SessaoVotacao("CA-2026", regra if regra is not None else RegraCA(), total_aptos)
+INICIO = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+FIM = datetime(2026, 10, 1, 17, 0, tzinfo=UTC)
+
+
+class RelogioControlado:
+    """Relógio injetável cujo instante os testes ajustam livremente."""
+
+    def __init__(self, agora: datetime) -> None:
+        self.agora = agora
+
+    def __call__(self) -> datetime:
+        return self.agora
+
+
+def _nova_sessao(
+    regra: RegraCA | None = None,
+    total_aptos: int = 0,
+    relogio: RelogioControlado | None = None,
+) -> SessaoVotacao:
+    return SessaoVotacao(
+        "CA-2026",
+        regra if regra is not None else RegraCA(),
+        total_aptos,
+        relogio=relogio,
+    )
 
 
 def _avancar_ate(sessao: SessaoVotacao, estado: EstadoSessao) -> None:
@@ -142,3 +172,112 @@ def test_sessao_sem_votos_apura_quorum_insuficiente():
 
     assert resultado.status == StatusResultado.QUORUM_INSUFICIENTE
     assert resultado.quorum_atingido is False
+
+
+def test_sessao_recusa_segundo_voto_do_mesmo_eleitor():
+    sessao = _nova_sessao()
+    _avancar_ate(sessao, EstadoSessao.EM_VOTACAO)
+    sessao.registrar_voto(Voto(eleitor_id="101", opcao="Chapa A"))
+
+    with pytest.raises(VotoRecusadoError, match="já votou"):
+        sessao.registrar_voto(Voto(eleitor_id="101", opcao="Chapa B"))
+
+    assert len(sessao.votos) == 1
+    assert sessao.votos[0].opcao == "Chapa A"
+
+
+@pytest.mark.parametrize(
+    ("primeiro", "segundo"),
+    [
+        pytest.param("AC-001", "AC-001#rep:PROC-101", id="titular-depois-procurador"),
+        pytest.param("AC-001#rep:PROC-101", "AC-001", id="procurador-depois-titular"),
+        pytest.param("AC-001#rep:PROC-101", "AC-001#rep:PROC-102", id="dois-procuradores"),
+    ],
+)
+def test_sessao_recusa_voto_repetido_pelo_mesmo_outorgante(primeiro: str, segundo: str):
+    sessao = _nova_sessao()
+    _avancar_ate(sessao, EstadoSessao.EM_VOTACAO)
+    sessao.registrar_voto(Voto(eleitor_id=primeiro, opcao="SIM", peso=500))
+
+    with pytest.raises(VotoRecusadoError, match="'AC-001' já votou"):
+        sessao.registrar_voto(Voto(eleitor_id=segundo, opcao="NAO", peso=500))
+
+    assert len(sessao.votos) == 1
+
+
+def test_sessao_aceita_o_mesmo_procurador_para_outorgantes_distintos():
+    sessao = _nova_sessao()
+    _avancar_ate(sessao, EstadoSessao.EM_VOTACAO)
+
+    sessao.registrar_voto(Voto(eleitor_id="AC-001#rep:PROC-101", opcao="SIM", peso=500))
+    sessao.registrar_voto(Voto(eleitor_id="AC-002#rep:PROC-101", opcao="NAO", peso=300))
+
+    assert len(sessao.votos) == 2
+
+
+def test_sessao_recusa_janela_com_inicio_apos_o_fim():
+    sessao = _nova_sessao()
+    sessao.abrir()
+
+    with pytest.raises(ValueError, match="posterior ao fim"):
+        sessao.liberar_votacao(inicio=FIM, fim=INICIO)
+
+    assert sessao.estado == EstadoSessao.ABERTA
+
+
+def test_sessao_sem_janela_aceita_voto_a_qualquer_momento():
+    relogio = RelogioControlado(datetime(1999, 1, 1, tzinfo=UTC))
+    sessao = _nova_sessao(relogio=relogio)
+    _avancar_ate(sessao, EstadoSessao.EM_VOTACAO)
+
+    sessao.registrar_voto(Voto(eleitor_id="101", opcao="Chapa A"))
+
+    assert sessao.inicio_votacao is None
+    assert sessao.fim_votacao is None
+    assert len(sessao.votos) == 1
+
+
+def test_sessao_recusa_voto_fora_da_janela_e_aceita_dentro():
+    relogio = RelogioControlado(INICIO - timedelta(minutes=1))
+    sessao = _nova_sessao(relogio=relogio)
+    sessao.abrir()
+    sessao.liberar_votacao(inicio=INICIO, fim=FIM)
+
+    with pytest.raises(VotoRecusadoError, match="só começa"):
+        sessao.registrar_voto(Voto(eleitor_id="101", opcao="Chapa A"))
+
+    relogio.agora = INICIO
+    sessao.registrar_voto(Voto(eleitor_id="101", opcao="Chapa A"))
+
+    relogio.agora = FIM + timedelta(minutes=1)
+    with pytest.raises(VotoRecusadoError, match="terminou"):
+        sessao.registrar_voto(Voto(eleitor_id="102", opcao="Chapa A"))
+
+    assert len(sessao.votos) == 1
+    assert sessao.estado == EstadoSessao.EM_VOTACAO
+
+
+def test_sessao_janela_apenas_com_inicio():
+    relogio = RelogioControlado(INICIO - timedelta(seconds=1))
+    sessao = _nova_sessao(relogio=relogio)
+    sessao.abrir()
+    sessao.liberar_votacao(inicio=INICIO)
+
+    with pytest.raises(VotoRecusadoError, match="só começa"):
+        sessao.registrar_voto(Voto(eleitor_id="101", opcao="Chapa A"))
+
+    relogio.agora = INICIO + timedelta(days=365)
+    sessao.registrar_voto(Voto(eleitor_id="101", opcao="Chapa A"))
+
+    assert len(sessao.votos) == 1
+
+
+def test_sessao_janela_apenas_com_fim_usa_relogio_utc_por_padrao():
+    sessao = _nova_sessao()
+    sessao.abrir()
+    sessao.liberar_votacao(fim=datetime(2000, 1, 1, tzinfo=UTC))
+
+    with pytest.raises(VotoRecusadoError, match="terminou"):
+        sessao.registrar_voto(Voto(eleitor_id="101", opcao="Chapa A"))
+
+    assert sessao.votos == ()
