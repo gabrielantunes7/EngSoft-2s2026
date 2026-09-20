@@ -33,6 +33,18 @@ from votacao.regras.base import RegraDeVotacao
 from votacao.regras.ca import RegraCA
 from votacao.regras.congresso import RegraCongresso
 from votacao.servicos import ServicoElegibilidade
+from votacao.sessao import (
+    EstadoSessao,
+    SessaoVotacao,
+    TransicaoInvalidaError,
+    VotoRecusadoError,
+)
+from votacao.tramitacao import (
+    RegistroTramitacao,
+    StatusTramitacao,
+    TramitacaoInvalidaError,
+    TramitacaoLegislativa,
+)
 
 __version__ = "0.1.0"
 
@@ -43,9 +55,11 @@ __all__ = [
     "BancoDadosSQL",
     "CasaLegislativa",
     "ElegibilidadeCandidato",
+    "EstadoSessao",
     "LogDeAuditoria",
     "MotorApuracao",
     "RegistroAuditoria",
+    "RegistroTramitacao",
     "RegraAssembleia",
     "RegraCA",
     "RegraCongresso",
@@ -53,14 +67,20 @@ __all__ = [
     "ResultadoApuracao",
     "ResultadoVerificacao",
     "ServicoElegibilidade",
+    "SessaoVotacao",
     "StatusResultado",
+    "StatusTramitacao",
     "TipoDecisaoAssembleia",
     "TipoEvento",
     "TipoMateriaCongresso",
+    "TramitacaoInvalidaError",
+    "TramitacaoLegislativa",
+    "TransicaoInvalidaError",
     "Usuario",
     "ValidadorElegibilidadeAssembleia",
     "ValidadorElegibilidadeCA",
     "ValidadorElegibilidadeCongresso",
     "Voto",
+    "VotoRecusadoError",
     "__version__",
 ]
