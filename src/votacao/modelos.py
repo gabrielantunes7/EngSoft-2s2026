@@ -49,8 +49,9 @@ class Voto:
         opcao: Opção escolhida (nome da chapa, 'SIM', 'NAO', 'BRANCO', 'NULO').
         peso: Peso decisório do voto (1 para CA/Congresso; quantidade de ações para Assembleia).
         timestamp: Data e hora do registro do voto.
-        representados: Identificadores dos eleitores cujo poder de voto foi consolidado
-            neste voto por procuração (Assembleia). Vazio nos votos individuais.
+        representados: Identificadores dos acionistas cujo capital foi consolidado neste voto
+            por procuração (Assembleia), inclusive o do próprio emissor quando as suas
+            ações entram no voto. Vazio nos votos individuais.
     """
 
     eleitor_id: str

@@ -33,6 +33,16 @@ class PoderDeVoto:
         """Peso consolidado do voto: o próprio mais o delegado."""
         return self.peso_proprio + self.peso_delegado
 
+    @property
+    def titulares(self) -> tuple[str, ...]:
+        """Acionistas cujo capital o voto carrega: os outorgantes e, se contar, o procurador.
+
+        O procurador só entra quando as suas próprias ações estão no voto; se ele delegou o
+        seu voto, o capital dele pertence ao voto do procurador a quem delegou.
+        """
+        proprio = (self.procurador_id,) if self.peso_proprio > 0 else ()
+        return tuple(sorted((*proprio, *self.outorgantes)))
+
 
 class ServicoProcuracao:
     """Cadastro e revogação de procurações, com as travas de validade do instrumento.

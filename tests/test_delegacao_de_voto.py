@@ -133,3 +133,28 @@ def test_regressao_assembleia_sem_procuracoes_vota_direto_como_antes():
 
     assert resultado.status == StatusResultado.APROVADO
     assert resultado.contagem_por_opcao == {"SIM": 650, "NAO": 300}
+
+
+@pytest.mark.parametrize(
+    "ordem",
+    [
+        pytest.param(("AC-3", "P-1"), id="acionista-procurador-primeiro"),
+        pytest.param(("P-1", "AC-3"), id="quem-recebeu-o-capital-primeiro"),
+    ],
+)
+def test_procurador_acionista_que_delegou_o_proprio_voto_nao_bloqueia_quem_leva_o_capital_dele(
+    ordem: tuple[str, str],
+):
+    servico, capital = _assembleia()
+    servico.banco.assembleia.adicionar_procurador(Procurador(id="AC-3", nome="Gama"))
+    servico.procuracoes.cadastrar("AC-3", "P-1")  # AC-3 delega as próprias 150 ações ao P-1...
+    servico.procuracoes.cadastrar("AC-1", "AC-3")  # ...e passa a representar o AC-1 (500 ações)
+    sessao = _sessao_aberta(capital)
+
+    for procurador in ordem:
+        sessao.registrar_voto(servico.autorizar_voto_do_procurador(procurador, "SIM"))
+    sessao.encerrar_votacao()
+    resultado = sessao.apurar()
+
+    assert sorted(voto.peso for voto in sessao.votos) == [150, 500]
+    assert resultado.contagem_por_opcao == {"SIM": 650}

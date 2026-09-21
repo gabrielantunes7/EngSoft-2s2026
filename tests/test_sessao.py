@@ -384,7 +384,6 @@ def _voto_consolidado(eleitor_id: str = "PROC-101") -> Voto:
         pytest.param("AC-001", id="representado-vota-direto"),
         pytest.param("AC-002", id="outro-representado-vota-direto"),
         pytest.param("AC-001#rep:PROC-102", id="representado-por-outro-procurador"),
-        pytest.param("PROC-101", id="procurador-vota-de-novo"),
     ],
 )
 def test_sessao_recusa_novo_voto_de_quem_ja_esta_no_voto_consolidado(segundo: str):
@@ -398,7 +397,7 @@ def test_sessao_recusa_novo_voto_de_quem_ja_esta_no_voto_consolidado(segundo: st
     assert len(sessao.votos) == 1
 
 
-@pytest.mark.parametrize("ja_votou", ["AC-002", "AC-002#rep:PROC-102", "PROC-101"])
+@pytest.mark.parametrize("ja_votou", ["AC-002", "AC-002#rep:PROC-102"])
 def test_sessao_recusa_voto_consolidado_que_inclui_quem_ja_votou_sem_registro_parcial(
     ja_votou: str,
 ):
@@ -440,3 +439,41 @@ def test_sessao_audita_o_voto_consolidado_uma_vez_com_o_peso_somado_e_sem_identi
     assert votos_no_log[0].dados == {"opcao": "SIM", "peso": 800}
     assert "AC-001" not in str(votos_no_log[0].dados)
     assert "PROC-101" not in str(votos_no_log[0].dados)
+
+
+def test_sessao_recusa_o_mesmo_procurador_consolidando_de_novo_o_mesmo_capital():
+    sessao = _nova_sessao()
+    _avancar_ate(sessao, EstadoSessao.EM_VOTACAO)
+    sessao.registrar_voto(_voto_consolidado())
+
+    with pytest.raises(VotoRecusadoError, match="já votou"):
+        sessao.registrar_voto(_voto_consolidado())
+
+    assert len(sessao.votos) == 1
+
+
+@pytest.mark.parametrize(
+    "ordem",
+    [
+        pytest.param(("AC-P", "PROC-2"), id="acionista-procurador-primeiro"),
+        pytest.param(("PROC-2", "AC-P"), id="quem-recebeu-o-capital-primeiro"),
+    ],
+)
+def test_sessao_nao_consome_a_identidade_de_procurador_que_nao_leva_o_proprio_capital(
+    ordem: tuple[str, str],
+):
+    # AC-P delegou as próprias ações ao PROC-2 e vota como procurador de AC-A.
+    votos = {
+        "AC-P": Voto(eleitor_id="AC-P", opcao="SIM", peso=100, representados=("AC-A",)),
+        "PROC-2": Voto(eleitor_id="PROC-2", opcao="SIM", peso=30, representados=("AC-P",)),
+    }
+    sessao = _nova_sessao()
+    _avancar_ate(sessao, EstadoSessao.EM_VOTACAO)
+
+    for emissor in ordem:
+        sessao.registrar_voto(votos[emissor])
+
+    assert len(sessao.votos) == 2
+    # O capital de AC-P foi gasto pelo voto do PROC-2: ele não pode mais votar por conta própria.
+    with pytest.raises(VotoRecusadoError, match="'AC-P' já votou"):
+        sessao.registrar_voto(Voto(eleitor_id="AC-P", opcao="NAO", peso=30))

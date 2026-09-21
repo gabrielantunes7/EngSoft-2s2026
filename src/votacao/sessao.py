@@ -12,9 +12,10 @@ from votacao.regras.base import RegraDeVotacao
 
 # Separador que o ServicoElegibilidade usa para marcar voto por procuração:
 # "<outorgante>#rep:<procurador>". Para fins de duplicata, a identidade do
-# voto é a do outorgante, votando ele próprio ou por procurador. O voto consolidado
-# de um procurador (`Voto.representados`) ocupa, além da sua, a identidade de cada
-# um dos outorgantes que representa.
+# voto é a do outorgante, votando ele próprio ou por procurador. Já o voto consolidado
+# de um procurador lista em `Voto.representados` todos os acionistas cujo capital ele
+# carrega (inclusive o próprio procurador, se as suas ações entram no voto): a
+# identidade é esse conjunto, e não o `eleitor_id` de quem emite o voto.
 SEPARADOR_PROCURACAO = "#rep:"
 
 
@@ -271,6 +272,7 @@ class SessaoVotacao:
 
     @staticmethod
     def _identidades(voto: Voto) -> set[str]:
-        """Eleitores que o voto consome: o próprio e os representados, se houver."""
-        titular = voto.eleitor_id.split(SEPARADOR_PROCURACAO, 1)[0]
-        return {titular, *voto.representados}
+        """Eleitores cujo capital o voto consome: os representados ou, sem eles, o titular."""
+        if voto.representados:
+            return set(voto.representados)
+        return {voto.eleitor_id.split(SEPARADOR_PROCURACAO, 1)[0]}

@@ -425,3 +425,44 @@ def test_poder_de_voto_e_zero_para_quem_nao_representa_ninguem(servico: ServicoP
 
     assert poder.peso_total == 0
     assert poder.outorgantes == ()
+
+
+# --- Titulares do capital consolidado ---
+
+
+def test_titulares_incluem_o_procurador_quando_as_acoes_dele_entram_no_voto(
+    servico: ServicoProcuracao, repo: RepositorioAssembleia
+):
+    _com_procurador_acionista(repo)
+    servico.cadastrar("AC-A", "AC-P", momento=AGORA)
+
+    poder = servico.calcular_poder_de_voto("AC-P", AGORA)
+
+    assert poder.titulares == ("AC-A", "AC-P")
+
+
+def test_titulares_excluem_o_procurador_que_delegou_o_proprio_voto(
+    servico: ServicoProcuracao, repo: RepositorioAssembleia
+):
+    _com_procurador_acionista(repo)
+    servico.cadastrar("AC-A", "AC-P", momento=AGORA)
+    servico.cadastrar("AC-P", "PROC-2", momento=AGORA)
+
+    poder = servico.calcular_poder_de_voto("AC-P", AGORA)
+
+    assert poder.titulares == ("AC-A",)
+
+
+def test_titulares_de_procurador_que_nao_e_acionista_sao_so_os_outorgantes(
+    servico: ServicoProcuracao,
+):
+    servico.cadastrar("AC-B", "PROC-1", momento=AGORA)
+    servico.cadastrar("AC-A", "PROC-1", momento=AGORA)
+
+    poder = servico.calcular_poder_de_voto("PROC-1", AGORA)
+
+    assert poder.titulares == ("AC-A", "AC-B")
+
+
+def test_titulares_de_acionista_sem_procuracoes_e_ele_mesmo(servico: ServicoProcuracao):
+    assert servico.calcular_poder_de_voto("AC-B", AGORA).titulares == ("AC-B",)

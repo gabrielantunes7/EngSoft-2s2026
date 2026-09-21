@@ -246,7 +246,8 @@ class ServicoElegibilidade:
             validar_opcao: Se True, verifica também a elegibilidade da opção.
 
         Returns:
-            Voto único com o peso consolidado e os outorgantes em `representados`.
+            Voto único com o peso consolidado e, em `representados`, os acionistas cujo
+            capital ele carrega.
 
         Raises:
             PermissionError: Caso o procurador não tenha nenhum poder de voto a exercer.
@@ -274,7 +275,7 @@ class ServicoElegibilidade:
             opcao=opcao.strip().upper(),
             peso=poder.peso_total,
             timestamp=momento or datetime.now(UTC),
-            representados=poder.outorgantes,
+            representados=poder.titulares,
         )
 
     def _normalizar_contexto(self, contexto: str) -> str:

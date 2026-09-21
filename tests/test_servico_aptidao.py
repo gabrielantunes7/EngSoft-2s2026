@@ -307,7 +307,7 @@ def test_autorizar_voto_do_procurador_acionista_soma_o_proprio_peso(
 
     assert voto.eleitor_id == "AC-003"
     assert voto.peso == 150_000 + 300_000
-    assert voto.representados == ("AC-002",)
+    assert voto.representados == ("AC-002", "AC-003")
 
 
 @pytest.mark.parametrize(
@@ -364,3 +364,19 @@ def test_voto_por_procurador_de_um_outorgante_continua_sem_consolidacao(
 
     assert voto.eleitor_id == "AC-001#rep:PROC-101"
     assert voto.representados == ()
+
+
+def test_autorizar_voto_do_procurador_que_delegou_o_proprio_voto_nao_leva_o_proprio_capital(
+    servico: ServicoElegibilidade,
+):
+    servico.banco.assembleia.adicionar_procurador(Procurador(id="AC-003", nome="Silva"))
+    servico.procuracoes.cadastrar("AC-003", "PROC-101")
+    servico.procuracoes.cadastrar("AC-002", "AC-003")
+
+    voto_do_acionista = servico.autorizar_voto_do_procurador("AC-003", "SIM")
+    voto_de_quem_recebeu_o_capital = servico.autorizar_voto_do_procurador("PROC-101", "SIM")
+
+    assert voto_do_acionista.peso == 300_000
+    assert voto_do_acionista.representados == ("AC-002",)
+    assert voto_de_quem_recebeu_o_capital.peso == 500_000 + 150_000
+    assert voto_de_quem_recebeu_o_capital.representados == ("AC-001", "AC-003")
