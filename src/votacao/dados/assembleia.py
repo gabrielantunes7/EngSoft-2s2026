@@ -81,6 +81,31 @@ class Procuracao:
 
 
 @dataclass(frozen=True)
+class Procurador:
+    """Representante habilitado a receber procurações de voto em assembleia.
+
+    Attributes:
+        id: Identificador único do procurador (CPF, CNPJ ou código de credenciamento).
+        nome: Nome civil ou razão social do procurador.
+        credenciado: Indica se o credenciamento perante a companhia está regular.
+        ativo: Indica se o cadastro do procurador está ativo.
+    """
+
+    id: str
+    nome: str
+    credenciado: bool = True
+    ativo: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.id.strip():
+            msg = "O identificador do procurador não pode ser vazio."
+            raise ValueError(msg)
+        if not self.nome.strip():
+            msg = "O nome do procurador não pode ser vazio."
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True)
 class CandidatoConselho:
     """Candidato à eleição de Conselho de Administração ou Diretoria.
 
@@ -113,6 +138,7 @@ class RepositorioAssembleia(RepositorioBase):
     def __init__(self) -> None:
         self._acionistas: dict[str, Acionista] = {}
         self._procuracoes: dict[tuple[str, str], Procuracao] = {}
+        self._procuradores: dict[str, Procurador] = {}
         self._candidatos: dict[str, CandidatoConselho] = {}
 
     def adicionar_acionista(self, acionista: Acionista) -> None:
@@ -147,6 +173,31 @@ class RepositorioAssembleia(RepositorioBase):
         """Lista todas as procurações emitidas por um dado acionista."""
         return [p for p in self._procuracoes.values() if p.outorgante_id == outorgante_id.strip()]
 
+    def obter_procuracao_vigente(
+        self, outorgante_id: str, momento: datetime | None = None
+    ) -> Procuracao | None:
+        """Devolve a procuração vigente do outorgante no instante dado, se houver."""
+        for procuracao in self.listar_procuracoes_do_outorgante(outorgante_id):
+            if procuracao.esta_vigente(momento):
+                return procuracao
+        return None
+
+    def listar_procuracoes_do_procurador(self, procurador_id: str) -> list[Procuracao]:
+        """Lista todas as procurações recebidas por um dado procurador."""
+        return [p for p in self._procuracoes.values() if p.procurador_id == procurador_id.strip()]
+
+    def adicionar_procurador(self, procurador: Procurador) -> None:
+        """Cadastra ou atualiza um procurador no repositório."""
+        self._procuradores[procurador.id.strip()] = procurador
+
+    def obter_procurador(self, id_procurador: str) -> Procurador | None:
+        """Busca um procurador pelo identificador."""
+        return self._procuradores.get(id_procurador.strip())
+
+    def listar_procuradores(self) -> list[Procurador]:
+        """Retorna todos os procuradores cadastrados."""
+        return list(self._procuradores.values())
+
     def adicionar_candidato_conselho(self, candidato: CandidatoConselho) -> None:
         """Registra uma candidatura ao conselho."""
         self._candidatos[candidato.id.strip()] = candidato
@@ -160,7 +211,8 @@ class RepositorioAssembleia(RepositorioBase):
         return list(self._candidatos.values())
 
     def limpar(self) -> None:
-        """Remove todos os dados acionários, procurações e candidaturas."""
+        """Remove todos os dados acionários, procurações, procuradores e candidaturas."""
         self._acionistas.clear()
         self._procuracoes.clear()
+        self._procuradores.clear()
         self._candidatos.clear()

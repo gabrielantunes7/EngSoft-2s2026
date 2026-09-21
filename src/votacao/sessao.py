@@ -12,7 +12,10 @@ from votacao.regras.base import RegraDeVotacao
 
 # Separador que o ServicoElegibilidade usa para marcar voto por procuração:
 # "<outorgante>#rep:<procurador>". Para fins de duplicata, a identidade do
-# voto é a do outorgante, votando ele próprio ou por procurador.
+# voto é a do outorgante, votando ele próprio ou por procurador. Já o voto consolidado
+# de um procurador lista em `Voto.representados` todos os acionistas cujo capital ele
+# carrega (inclusive o próprio procurador, se as suas ações entram no voto): a
+# identidade é esse conjunto, e não o `eleitor_id` de quem emite o voto.
 SEPARADOR_PROCURACAO = "#rep:"
 
 
@@ -184,17 +187,19 @@ class SessaoVotacao:
         Raises:
             TransicaoInvalidaError: Se a sessão não estiver em EM_VOTACAO.
             VotoRecusadoError: Se o relógio estiver fora da janela de votação ou se o
-                eleitor — diretamente ou por procurador — já tiver votado nesta sessão.
+                eleitor — diretamente, por procurador ou representado em voto consolidado —
+                já tiver votado nesta sessão.
         """
         self._exigir_estado(EstadoSessao.EM_VOTACAO, operacao="registrar voto")
         self._exigir_dentro_da_janela()
 
-        identidade = self._identidade(voto)
-        if identidade in self._eleitores:
-            msg = f"O eleitor '{identidade}' já votou na sessão '{self.id_sessao}'."
+        identidades = self._identidades(voto)
+        ja_votaram = sorted(identidades & self._eleitores)
+        if ja_votaram:
+            msg = f"O eleitor '{ja_votaram[0]}' já votou na sessão '{self.id_sessao}'."
             raise VotoRecusadoError(msg)
 
-        self._eleitores.add(identidade)
+        self._eleitores.update(identidades)
         self._votos.append(voto)
 
         if self.log is None:
@@ -266,5 +271,8 @@ class SessaoVotacao:
             self.log.registrar(evento, dados)
 
     @staticmethod
-    def _identidade(voto: Voto) -> str:
-        return voto.eleitor_id.split(SEPARADOR_PROCURACAO, 1)[0]
+    def _identidades(voto: Voto) -> set[str]:
+        """Eleitores cujo capital o voto consome: os representados ou, sem eles, o titular."""
+        if voto.representados:
+            return set(voto.representados)
+        return {voto.eleitor_id.split(SEPARADOR_PROCURACAO, 1)[0]}

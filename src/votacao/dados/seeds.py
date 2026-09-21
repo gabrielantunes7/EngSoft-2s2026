@@ -6,6 +6,7 @@ from votacao.dados.assembleia import (
     Acionista,
     CandidatoConselho,
     Procuracao,
+    Procurador,
     RepositorioAssembleia,
 )
 from votacao.dados.ca import ChapaCA, Discente, RepositorioCA
@@ -156,6 +157,11 @@ def carregar_dados_padrao_assembleia(
             ativo=False,
         )
     )
+
+    # Procuradores credenciados
+    r.adicionar_procurador(Procurador(id="PROC-101", nome="Advocacia Souza & Associados"))
+    r.adicionar_procurador(Procurador(id="PROC-102", nome="Marina Costa Representações"))
+    r.adicionar_procurador(Procurador(id="PROC-103", nome="Carlos Andrade Advogados"))
 
     # Procurações
     agora = datetime.now(UTC)

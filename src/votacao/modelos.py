@@ -49,12 +49,16 @@ class Voto:
         opcao: Opção escolhida (nome da chapa, 'SIM', 'NAO', 'BRANCO', 'NULO').
         peso: Peso decisório do voto (1 para CA/Congresso; quantidade de ações para Assembleia).
         timestamp: Data e hora do registro do voto.
+        representados: Identificadores dos acionistas cujo capital foi consolidado neste voto
+            por procuração (Assembleia), inclusive o do próprio emissor quando as suas
+            ações entram no voto. Vazio nos votos individuais.
     """
 
     eleitor_id: str
     opcao: str
     peso: int = 1
     timestamp: datetime | None = None
+    representados: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.peso <= 0:
@@ -65,6 +69,9 @@ class Voto:
             raise ValueError(msg)
         if not self.opcao.strip():
             msg = "A opção de voto não pode ser vazia."
+            raise ValueError(msg)
+        if any(not representado.strip() for representado in self.representados):
+            msg = "Os identificadores dos representados não podem ser vazios."
             raise ValueError(msg)
 
 

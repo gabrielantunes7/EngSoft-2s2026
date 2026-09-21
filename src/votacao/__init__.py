@@ -7,6 +7,7 @@ from votacao.auditoria import (
     ResultadoVerificacao,
     TipoEvento,
 )
+from votacao.dados.assembleia import Procurador
 from votacao.dados.banco_sql import BancoDadosSQL
 from votacao.dados.seeds import BancoDadosMock
 from votacao.elegibilidade.validador_assembleia import (
@@ -28,6 +29,11 @@ from votacao.modelos import (
     Voto,
 )
 from votacao.motor import MotorApuracao
+from votacao.procuracoes import (
+    PoderDeVoto,
+    ProcuracaoInvalidaError,
+    ServicoProcuracao,
+)
 from votacao.regras.assembleia import RegraAssembleia
 from votacao.regras.base import RegraDeVotacao
 from votacao.regras.ca import RegraCA
@@ -58,6 +64,9 @@ __all__ = [
     "EstadoSessao",
     "LogDeAuditoria",
     "MotorApuracao",
+    "PoderDeVoto",
+    "ProcuracaoInvalidaError",
+    "Procurador",
     "RegistroAuditoria",
     "RegistroTramitacao",
     "RegraAssembleia",
@@ -67,6 +76,7 @@ __all__ = [
     "ResultadoApuracao",
     "ResultadoVerificacao",
     "ServicoElegibilidade",
+    "ServicoProcuracao",
     "SessaoVotacao",
     "StatusResultado",
     "StatusTramitacao",
