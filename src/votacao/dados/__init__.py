@@ -4,6 +4,7 @@ from votacao.dados.assembleia import (
     Acionista,
     CandidatoConselho,
     Procuracao,
+    Procurador,
     RepositorioAssembleia,
 )
 from votacao.dados.banco_sql import BancoDadosSQL
@@ -31,6 +32,7 @@ __all__ = [
     "MateriaLegislativa",
     "Parlamentar",
     "Procuracao",
+    "Procurador",
     "RepositorioAssembleia",
     "RepositorioBase",
     "RepositorioCA",
