@@ -173,6 +173,15 @@ class RepositorioAssembleia(RepositorioBase):
         """Lista todas as procurações emitidas por um dado acionista."""
         return [p for p in self._procuracoes.values() if p.outorgante_id == outorgante_id.strip()]
 
+    def obter_procuracao_vigente(
+        self, outorgante_id: str, momento: datetime | None = None
+    ) -> Procuracao | None:
+        """Devolve a procuração vigente do outorgante no instante dado, se houver."""
+        for procuracao in self.listar_procuracoes_do_outorgante(outorgante_id):
+            if procuracao.esta_vigente(momento):
+                return procuracao
+        return None
+
     def listar_procuracoes_do_procurador(self, procurador_id: str) -> list[Procuracao]:
         """Lista todas as procurações recebidas por um dado procurador."""
         return [p for p in self._procuracoes.values() if p.procurador_id == procurador_id.strip()]

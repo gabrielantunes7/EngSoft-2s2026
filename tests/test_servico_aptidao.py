@@ -93,10 +93,21 @@ def test_consultar_aptidao_ca(servico: ServicoElegibilidade):
 
 
 def test_consultar_aptidao_assembleia_direto_e_procurador(servico: ServicoElegibilidade):
-    # Voto direto de acionista
-    apt_titular = servico.consultar_aptidao("AC-001", "ASSEMBLEIA")
+    # Voto direto de acionista sem procuração vigente (a de AC-003 foi revogada)
+    apt_titular = servico.consultar_aptidao("AC-003", "ASSEMBLEIA")
     assert apt_titular.apto is True
-    assert apt_titular.peso_voto == 500_000
+    assert apt_titular.peso_voto == 150_000
+
+    # Voto direto de acionista cuja procuração expirou
+    apt_titular_exp = servico.consultar_aptidao("AC-002", "ASSEMBLEIA")
+    assert apt_titular_exp.apto is True
+    assert apt_titular_exp.peso_voto == 300_000
+
+    # Quem delegou o voto por procuração vigente não vota diretamente
+    apt_delegou = servico.consultar_aptidao("AC-001", "ASSEMBLEIA")
+    assert apt_delegou.apto is False
+    assert apt_delegou.peso_voto == 0
+    assert "PROC-101" in (apt_delegou.motivo_inaptidao or "")
 
     # Voto com procuração válida
     agora = datetime.now(UTC)
@@ -208,15 +219,23 @@ def test_autorizar_voto_ca_opcao_invalida(servico: ServicoElegibilidade):
 
 
 def test_autorizar_voto_assembleia_titular_e_procurador(servico: ServicoElegibilidade):
-    # Titular
+    # Titular sem procuração vigente (a de AC-002 expirou)
     voto_titular = servico.autorizar_voto(
-        eleitor_id="AC-001",
+        eleitor_id="AC-002",
         opcao="SIM",
         contexto="ASSEMBLEIA",
     )
-    assert voto_titular.eleitor_id == "AC-001"
+    assert voto_titular.eleitor_id == "AC-002"
     assert voto_titular.opcao == "SIM"
-    assert voto_titular.peso == 500_000
+    assert voto_titular.peso == 300_000
+
+    # Titular que delegou o voto é recusado enquanto a procuração estiver vigente
+    with pytest.raises(PermissionError, match="delegou o voto ao procurador 'PROC-101'"):
+        servico.autorizar_voto(
+            eleitor_id="AC-001",
+            opcao="SIM",
+            contexto="ASSEMBLEIA",
+        )
 
     # Procurador
     voto_proc = servico.autorizar_voto(

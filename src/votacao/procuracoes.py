@@ -108,10 +108,7 @@ class ServicoProcuracao:
         self, outorgante_id: str, momento: datetime | None = None
     ) -> Procuracao | None:
         """Devolve a procuração vigente do outorgante no instante dado, se houver."""
-        for procuracao in self.repo.listar_procuracoes_do_outorgante(outorgante_id):
-            if procuracao.esta_vigente(momento):
-                return procuracao
-        return None
+        return self.repo.obter_procuracao_vigente(outorgante_id, momento)
 
     def _exigir_outorgante_habilitado(self, outorgante_id: str) -> Acionista:
         acionista = self.repo.obter_acionista(outorgante_id)

@@ -22,7 +22,9 @@ class ValidadorElegibilidadeAssembleia:
             - Acionista titular cadastrado e com status ativo;
             - Ausência de bloqueio no exercício do direito de voto;
             - Titularidade de ações ordinárias (com direito a voto) > 0;
-            - Se exercido via procuração: instrumento formal ativo, cadastrado e dentro do prazo.
+            - Se exercido via procuração: instrumento formal ativo, cadastrado e dentro do prazo;
+            - Se exercido diretamente: ausência de procuração vigente, pois quem delegou o
+              voto só volta a votar por conta própria depois de revogar a procuração.
 
         Retorna:
             AptidaoVoto com peso_voto igual à quantidade de ações ordinárias do titular.
@@ -106,6 +108,24 @@ class ValidadorElegibilidadeAssembleia:
                     "acoes_preferenciais": acionista.acoes_preferenciais,
                 },
             )
+
+        if procurador_id is None:
+            delegacao = repo.obter_procuracao_vigente(acionista_id, momento)
+            if delegacao is not None:
+                return AptidaoVoto(
+                    apto=False,
+                    peso_voto=0,
+                    motivo_inaptidao=(
+                        f"Acionista '{acionista.nome}' (ID {acionista_id}) delegou o voto ao "
+                        f"procurador '{delegacao.procurador_id}' por procuração vigente; "
+                        "revogue a procuração para votar diretamente."
+                    ),
+                    dados_eleitor={
+                        "acionista_id": acionista_id,
+                        "nome": acionista.nome,
+                        "procurador_id": delegacao.procurador_id,
+                    },
+                )
 
         tipo_voto = "representacao_procuracao" if procurador_id else "titular_direto"
         return AptidaoVoto(
