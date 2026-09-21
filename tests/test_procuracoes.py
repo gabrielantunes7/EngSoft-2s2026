@@ -297,3 +297,131 @@ def test_obter_vigente_considera_o_momento_consultado(servico: ServicoProcuracao
 
     assert servico.obter_vigente("AC-A", AGORA + timedelta(days=29)) is not None
     assert servico.obter_vigente("AC-A", EM_30_DIAS + timedelta(seconds=1)) is None
+
+
+# --- Poder de voto consolidado ---
+
+
+def _com_procurador_acionista(repo: RepositorioAssembleia, acoes: int = 30) -> None:
+    """Cadastra AC-P, que é ao mesmo tempo acionista e procurador credenciado."""
+    repo.adicionar_acionista(Acionista(id="AC-P", nome="Pedro", acoes_ordinarias=acoes))
+    repo.adicionar_procurador(Procurador(id="AC-P", nome="Pedro"))
+
+
+def test_poder_de_voto_soma_as_acoes_dos_outorgantes_do_procurador(servico: ServicoProcuracao):
+    servico.cadastrar("AC-B", "PROC-1", momento=AGORA)
+    servico.cadastrar("AC-A", "PROC-1", momento=AGORA)
+
+    poder = servico.calcular_poder_de_voto("PROC-1", AGORA)
+
+    assert poder.procurador_id == "PROC-1"
+    assert poder.peso_proprio == 0
+    assert poder.peso_delegado == 150
+    assert poder.peso_total == 150
+    assert poder.outorgantes == ("AC-A", "AC-B")
+
+
+def test_poder_de_voto_soma_as_acoes_proprias_do_procurador_acionista(
+    servico: ServicoProcuracao, repo: RepositorioAssembleia
+):
+    _com_procurador_acionista(repo)
+    servico.cadastrar("AC-A", "AC-P", momento=AGORA)
+
+    poder = servico.calcular_poder_de_voto(" AC-P ", AGORA)
+
+    assert poder.peso_proprio == 30
+    assert poder.peso_delegado == 100
+    assert poder.peso_total == 130
+    assert poder.outorgantes == ("AC-A",)
+
+
+def test_poder_de_voto_de_acionista_sem_procuracoes_e_o_proprio_peso(
+    servico: ServicoProcuracao,
+):
+    poder = servico.calcular_poder_de_voto("AC-B", AGORA)
+
+    assert poder.peso_proprio == 50
+    assert poder.peso_delegado == 0
+    assert poder.outorgantes == ()
+
+
+def test_procurador_que_delegou_o_proprio_voto_exerce_apenas_o_poder_delegado(
+    servico: ServicoProcuracao, repo: RepositorioAssembleia
+):
+    _com_procurador_acionista(repo)
+    servico.cadastrar("AC-A", "AC-P", momento=AGORA)
+    servico.cadastrar("AC-P", "PROC-2", momento=AGORA)
+
+    poder = servico.calcular_poder_de_voto("AC-P", AGORA)
+
+    assert poder.peso_proprio == 0
+    assert poder.peso_delegado == 100
+    assert poder.outorgantes == ("AC-A",)
+
+
+@pytest.mark.parametrize(
+    "acionista_depois",
+    [
+        pytest.param(
+            Acionista(id="AC-A", nome="Alfa", acoes_ordinarias=100, bloqueado=True), id="bloqueado"
+        ),
+        pytest.param(
+            Acionista(id="AC-A", nome="Alfa", acoes_ordinarias=100, ativo=False), id="inativo"
+        ),
+        pytest.param(
+            Acionista(id="AC-A", nome="Alfa", acoes_ordinarias=0), id="sem-acoes-ordinarias"
+        ),
+    ],
+)
+def test_poder_de_voto_ignora_outorgante_que_deixou_de_estar_apto(
+    servico: ServicoProcuracao, repo: RepositorioAssembleia, acionista_depois: Acionista
+):
+    servico.cadastrar("AC-A", "PROC-1", momento=AGORA)
+    servico.cadastrar("AC-B", "PROC-1", momento=AGORA)
+    repo.adicionar_acionista(acionista_depois)
+
+    poder = servico.calcular_poder_de_voto("PROC-1", AGORA)
+
+    assert poder.peso_delegado == 50
+    assert poder.outorgantes == ("AC-B",)
+
+
+def test_poder_de_voto_ignora_procuracao_revogada(servico: ServicoProcuracao):
+    servico.cadastrar("AC-A", "PROC-1", momento=AGORA)
+    servico.cadastrar("AC-B", "PROC-1", momento=AGORA)
+    servico.revogar("AC-A", "PROC-1")
+
+    poder = servico.calcular_poder_de_voto("PROC-1", AGORA)
+
+    assert poder.peso_delegado == 50
+    assert poder.outorgantes == ("AC-B",)
+
+
+def test_poder_de_voto_ignora_procuracao_expirada_no_momento_consultado(
+    servico: ServicoProcuracao,
+):
+    servico.cadastrar("AC-A", "PROC-1", data_expiracao=EM_30_DIAS, momento=AGORA)
+    servico.cadastrar("AC-B", "PROC-1", momento=AGORA)
+
+    depois_do_prazo = EM_30_DIAS + timedelta(days=1)
+    poder = servico.calcular_poder_de_voto("PROC-1", depois_do_prazo)
+
+    assert poder.outorgantes == ("AC-B",)
+    assert poder.peso_total == 50
+
+
+def test_poder_de_voto_nao_inclui_outorgantes_de_outro_procurador(servico: ServicoProcuracao):
+    servico.cadastrar("AC-A", "PROC-1", momento=AGORA)
+    servico.cadastrar("AC-B", "PROC-2", momento=AGORA)
+
+    poder = servico.calcular_poder_de_voto("PROC-1", AGORA)
+
+    assert poder.outorgantes == ("AC-A",)
+    assert poder.peso_total == 100
+
+
+def test_poder_de_voto_e_zero_para_quem_nao_representa_ninguem(servico: ServicoProcuracao):
+    poder = servico.calcular_poder_de_voto("PROC-1", AGORA)
+
+    assert poder.peso_total == 0
+    assert poder.outorgantes == ()

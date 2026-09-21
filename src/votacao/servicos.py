@@ -18,6 +18,7 @@ from votacao.modelos import (
     Usuario,
     Voto,
 )
+from votacao.procuracoes import ServicoProcuracao
 
 
 class ServicoElegibilidade:
@@ -36,6 +37,7 @@ class ServicoElegibilidade:
         self.validador_ca = ValidadorElegibilidadeCA()
         self.validador_assembleia = ValidadorElegibilidadeAssembleia()
         self.validador_congresso = ValidadorElegibilidadeCongresso()
+        self.procuracoes = ServicoProcuracao(self.banco.assembleia)
 
     def autenticar(self, identificador: str, contexto: str) -> Usuario | None:
         """Autentica o usuário na base correspondente ao contexto do processo de escolha.
@@ -221,6 +223,58 @@ class ServicoElegibilidade:
             opcao=opcao.strip().upper(),
             peso=aptidao.peso_voto,
             timestamp=timestamp_voto,
+        )
+
+    def autorizar_voto_do_procurador(
+        self,
+        procurador_id: str,
+        opcao: str,
+        momento: datetime | None = None,
+        validar_opcao: bool = True,
+    ) -> Voto:
+        """Emite um único voto com todo o poder de voto que o procurador exerce.
+
+        O peso do voto consolida, no momento da emissão, as ações do próprio procurador
+        (se for acionista apto) e as de cada outorgante com procuração vigente e apto.
+        Todos votam na mesma opção; para votar de forma diferente por algum outorgante,
+        use `autorizar_voto` com `procurador_id`.
+
+        Args:
+            procurador_id: Procurador que emite o voto.
+            opcao: Deliberação ('SIM'/'NAO'/...) ou candidato ao conselho.
+            momento: Timestamp do registro (padrão: agora UTC).
+            validar_opcao: Se True, verifica também a elegibilidade da opção.
+
+        Returns:
+            Voto único com o peso consolidado e os outorgantes em `representados`.
+
+        Raises:
+            PermissionError: Caso o procurador não tenha nenhum poder de voto a exercer.
+            ValueError: Caso a opção de voto seja inválida ou inelegível.
+        """
+        poder = self.procuracoes.calcular_poder_de_voto(procurador_id, momento)
+        if poder.peso_total == 0:
+            msg = (
+                f"Procurador '{procurador_id}' sem poder de voto: não possui ações aptas "
+                "próprias nem procurações vigentes de acionistas aptos."
+            )
+            raise PermissionError(msg)
+
+        if validar_opcao:
+            eleg = self.validar_candidato_ou_opcao(opcao_ou_candidato=opcao, contexto="ASSEMBLEIA")
+            if not eleg.elegivel:
+                msg = (
+                    f"Opção ou candidatura '{opcao}' inelegível para votação no contexto "
+                    f"ASSEMBLEIA: {eleg.motivo_inelegibilidade}"
+                )
+                raise ValueError(msg)
+
+        return Voto(
+            eleitor_id=poder.procurador_id,
+            opcao=opcao.strip().upper(),
+            peso=poder.peso_total,
+            timestamp=momento or datetime.now(UTC),
+            representados=poder.outorgantes,
         )
 
     def _normalizar_contexto(self, contexto: str) -> str:

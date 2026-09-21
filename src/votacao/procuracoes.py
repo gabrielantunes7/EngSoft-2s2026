@@ -1,13 +1,37 @@
 """Gestão de procurações de voto em assembleias de acionistas."""
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from votacao.dados.assembleia import Acionista, Procuracao, Procurador, RepositorioAssembleia
+from votacao.elegibilidade.validador_assembleia import ValidadorElegibilidadeAssembleia
 
 
 class ProcuracaoInvalidaError(ValueError):
     """Procuração que não pode ser cadastrada ou revogada."""
+
+
+@dataclass(frozen=True)
+class PoderDeVoto:
+    """Poder de voto que um procurador exerce em uma única emissão de voto.
+
+    Attributes:
+        procurador_id: Procurador que emite o voto.
+        peso_proprio: Ações ordinárias do próprio procurador, quando ele é acionista apto
+            e não delegou o seu voto a outra pessoa.
+        peso_delegado: Soma das ações dos outorgantes aptos com procuração vigente.
+        outorgantes: Acionistas representados, em ordem alfabética.
+    """
+
+    procurador_id: str
+    peso_proprio: int = 0
+    peso_delegado: int = 0
+    outorgantes: tuple[str, ...] = ()
+
+    @property
+    def peso_total(self) -> int:
+        """Peso consolidado do voto: o próprio mais o delegado."""
+        return self.peso_proprio + self.peso_delegado
 
 
 class ServicoProcuracao:
@@ -109,6 +133,43 @@ class ServicoProcuracao:
     ) -> Procuracao | None:
         """Devolve a procuração vigente do outorgante no instante dado, se houver."""
         return self.repo.obter_procuracao_vigente(outorgante_id, momento)
+
+    def calcular_poder_de_voto(
+        self, procurador_id: str, momento: datetime | None = None
+    ) -> PoderDeVoto:
+        """Consolida o poder de voto que o procurador exerce no instante dado.
+
+        Soma as ações do próprio procurador (se for acionista apto e não tiver delegado o
+        seu voto) às de cada outorgante com procuração vigente que ainda esteja apto a
+        votar. Outorgantes que ficaram bloqueados ou inativos depois do cadastro não
+        entram na soma.
+        """
+        procurador_id = procurador_id.strip()
+
+        como_titular = ValidadorElegibilidadeAssembleia.validar_eleitor(
+            procurador_id, self.repo, momento=momento
+        )
+        peso_proprio = como_titular.peso_voto if como_titular.apto else 0
+
+        peso_delegado = 0
+        outorgantes: list[str] = []
+        for procuracao in self.repo.listar_procuracoes_do_procurador(procurador_id):
+            aptidao = ValidadorElegibilidadeAssembleia.validar_eleitor(
+                procuracao.outorgante_id,
+                self.repo,
+                procurador_id=procurador_id,
+                momento=momento,
+            )
+            if aptidao.apto:
+                peso_delegado += aptidao.peso_voto
+                outorgantes.append(procuracao.outorgante_id)
+
+        return PoderDeVoto(
+            procurador_id=procurador_id,
+            peso_proprio=peso_proprio,
+            peso_delegado=peso_delegado,
+            outorgantes=tuple(sorted(outorgantes)),
+        )
 
     def _exigir_outorgante_habilitado(self, outorgante_id: str) -> Acionista:
         acionista = self.repo.obter_acionista(outorgante_id)

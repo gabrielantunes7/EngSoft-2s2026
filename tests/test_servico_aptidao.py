@@ -1,9 +1,10 @@
 """Testes unitários e de integração para o ServicoElegibilidade."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from votacao.dados.assembleia import Procurador
 from votacao.dados.seeds import BancoDadosMock
 from votacao.modelos import CasaLegislativa
 from votacao.servicos import ServicoElegibilidade
@@ -271,3 +272,95 @@ def test_autorizar_voto_sem_validar_opcao(servico: ServicoElegibilidade):
     assert voto.eleitor_id == "247314"
     assert voto.opcao == "CHAPA INEXISTENTE QUALQUER"
     assert voto.peso == 1
+
+
+def test_autorizar_voto_do_procurador_emite_um_voto_com_o_peso_do_outorgante(
+    servico: ServicoElegibilidade,
+):
+    voto = servico.autorizar_voto_do_procurador("PROC-101", " sim ")
+
+    assert voto.eleitor_id == "PROC-101"
+    assert voto.opcao == "SIM"
+    assert voto.peso == 500_000
+    assert voto.representados == ("AC-001",)
+    assert voto.timestamp is not None
+
+
+def test_autorizar_voto_do_procurador_soma_o_peso_de_todos_os_outorgantes(
+    servico: ServicoElegibilidade,
+):
+    servico.procuracoes.cadastrar("AC-003", "PROC-101")
+
+    voto = servico.autorizar_voto_do_procurador("PROC-101", "NAO")
+
+    assert voto.peso == 650_000
+    assert voto.representados == ("AC-001", "AC-003")
+
+
+def test_autorizar_voto_do_procurador_acionista_soma_o_proprio_peso(
+    servico: ServicoElegibilidade,
+):
+    servico.banco.assembleia.adicionar_procurador(Procurador(id="AC-003", nome="Silva"))
+    servico.procuracoes.cadastrar("AC-002", "AC-003")
+
+    voto = servico.autorizar_voto_do_procurador("AC-003", "SIM")
+
+    assert voto.eleitor_id == "AC-003"
+    assert voto.peso == 150_000 + 300_000
+    assert voto.representados == ("AC-002",)
+
+
+@pytest.mark.parametrize(
+    "procurador",
+    [
+        pytest.param("PROC-102", id="procuracao-expirada"),
+        pytest.param("PROC-103", id="procuracao-revogada"),
+        pytest.param("PROC-FANTASMA", id="sem-procuracao"),
+    ],
+)
+def test_autorizar_voto_do_procurador_recusa_quem_nao_tem_poder_de_voto(
+    servico: ServicoElegibilidade, procurador: str
+):
+    with pytest.raises(PermissionError, match="sem poder de voto"):
+        servico.autorizar_voto_do_procurador(procurador, "SIM")
+
+
+def test_autorizar_voto_do_procurador_considera_a_vigencia_no_momento_informado(
+    servico: ServicoElegibilidade,
+):
+    daqui_a_60_dias = datetime.now(UTC) + timedelta(days=60)
+
+    with pytest.raises(PermissionError, match="sem poder de voto"):
+        servico.autorizar_voto_do_procurador("PROC-101", "SIM", momento=daqui_a_60_dias)
+
+
+def test_autorizar_voto_do_procurador_registra_o_momento_informado_no_voto(
+    servico: ServicoElegibilidade,
+):
+    momento = datetime.now(UTC)
+
+    voto = servico.autorizar_voto_do_procurador("PROC-101", "SIM", momento=momento)
+
+    assert voto.timestamp == momento
+
+
+def test_autorizar_voto_do_procurador_valida_a_opcao(servico: ServicoElegibilidade):
+    with pytest.raises(ValueError, match="inelegível"):
+        servico.autorizar_voto_do_procurador("PROC-101", "CANDIDATO-INEXISTENTE")
+
+    voto_conselho = servico.autorizar_voto_do_procurador("PROC-101", "CONS-01")
+    assert voto_conselho.opcao == "CONS-01"
+
+    voto_sem_validacao = servico.autorizar_voto_do_procurador(
+        "PROC-101", "qualquer coisa", validar_opcao=False
+    )
+    assert voto_sem_validacao.opcao == "QUALQUER COISA"
+
+
+def test_voto_por_procurador_de_um_outorgante_continua_sem_consolidacao(
+    servico: ServicoElegibilidade,
+):
+    voto = servico.autorizar_voto("AC-001", "SIM", "ASSEMBLEIA", procurador_id="PROC-101")
+
+    assert voto.eleitor_id == "AC-001#rep:PROC-101"
+    assert voto.representados == ()

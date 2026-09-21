@@ -86,3 +86,20 @@ def test_elegibilidade_candidato_criacao():
     assert eleg.elegivel is False
     assert eleg.motivo_inelegibilidade == "Membro formando no próximo semestre."
     assert eleg.detalhes["membro"] == "RA 123456"
+
+
+def test_voto_individual_nao_representa_ninguem_por_padrao():
+    voto = Voto(eleitor_id="101", opcao="Chapa A")
+
+    assert voto.representados == ()
+
+
+def test_voto_consolidado_guarda_os_representados():
+    voto = Voto(eleitor_id="PROC-1", opcao="SIM", peso=800, representados=("AC-1", "AC-2"))
+
+    assert voto.representados == ("AC-1", "AC-2")
+
+
+def test_voto_recusa_representado_vazio():
+    with pytest.raises(ValueError, match="representados não podem ser vazios"):
+        Voto(eleitor_id="PROC-1", opcao="SIM", peso=800, representados=("AC-1", "  "))

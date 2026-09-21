@@ -372,3 +372,71 @@ def test_sessao_registra_o_ciclo_completo_no_log():
     assert proclamacao.dados["contagem_por_opcao"] == resultado.contagem_por_opcao
 
     assert log.verificar_integridade().integro
+
+
+def _voto_consolidado(eleitor_id: str = "PROC-101") -> Voto:
+    return Voto(eleitor_id=eleitor_id, opcao="SIM", peso=800, representados=("AC-001", "AC-002"))
+
+
+@pytest.mark.parametrize(
+    "segundo",
+    [
+        pytest.param("AC-001", id="representado-vota-direto"),
+        pytest.param("AC-002", id="outro-representado-vota-direto"),
+        pytest.param("AC-001#rep:PROC-102", id="representado-por-outro-procurador"),
+        pytest.param("PROC-101", id="procurador-vota-de-novo"),
+    ],
+)
+def test_sessao_recusa_novo_voto_de_quem_ja_esta_no_voto_consolidado(segundo: str):
+    sessao = _nova_sessao()
+    _avancar_ate(sessao, EstadoSessao.EM_VOTACAO)
+    sessao.registrar_voto(_voto_consolidado())
+
+    with pytest.raises(VotoRecusadoError, match="já votou"):
+        sessao.registrar_voto(Voto(eleitor_id=segundo, opcao="NAO", peso=10))
+
+    assert len(sessao.votos) == 1
+
+
+@pytest.mark.parametrize("ja_votou", ["AC-002", "AC-002#rep:PROC-102", "PROC-101"])
+def test_sessao_recusa_voto_consolidado_que_inclui_quem_ja_votou_sem_registro_parcial(
+    ja_votou: str,
+):
+    sessao = _nova_sessao()
+    _avancar_ate(sessao, EstadoSessao.EM_VOTACAO)
+    sessao.registrar_voto(Voto(eleitor_id=ja_votou, opcao="NAO", peso=300))
+
+    with pytest.raises(VotoRecusadoError, match="já votou"):
+        sessao.registrar_voto(_voto_consolidado())
+
+    assert len(sessao.votos) == 1
+    # AC-001 não foi marcado como votado pela tentativa recusada.
+    sessao.registrar_voto(Voto(eleitor_id="AC-001", opcao="SIM", peso=500))
+    assert len(sessao.votos) == 2
+
+
+def test_sessao_aceita_consolidados_de_procuradores_com_outorgantes_distintos():
+    sessao = _nova_sessao()
+    _avancar_ate(sessao, EstadoSessao.EM_VOTACAO)
+
+    sessao.registrar_voto(_voto_consolidado("PROC-101"))
+    sessao.registrar_voto(
+        Voto(eleitor_id="PROC-102", opcao="NAO", peso=90, representados=("AC-003",))
+    )
+
+    assert len(sessao.votos) == 2
+
+
+def test_sessao_audita_o_voto_consolidado_uma_vez_com_o_peso_somado_e_sem_identificar_ninguem():
+    log = LogDeAuditoria("CA-2026")
+    sessao = _nova_sessao(log=log)
+    _avancar_ate(sessao, EstadoSessao.EM_VOTACAO)
+
+    protocolo = sessao.registrar_voto(_voto_consolidado())
+
+    assert protocolo is not None
+    votos_no_log = [r for r in log.registros if r.evento == TipoEvento.VOTO_REGISTRADO]
+    assert len(votos_no_log) == 1
+    assert votos_no_log[0].dados == {"opcao": "SIM", "peso": 800}
+    assert "AC-001" not in str(votos_no_log[0].dados)
+    assert "PROC-101" not in str(votos_no_log[0].dados)
