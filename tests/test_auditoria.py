@@ -5,6 +5,7 @@ fraudador com acesso ao armazenamento, que altera os registros sem passar pela A
 log. É exatamente esse cenário que o encadeamento por hash existe para denunciar.
 """
 
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -447,3 +448,23 @@ def test_auditoria_proclamacao_depois_do_encerramento_ancorado_e_aceita():
     log.registrar(TipoEvento.RESULTADO_PROCLAMADO, {"vencedor_ou_decisao": "CHAPA RENOVA"})
 
     assert log.verificar_integridade(ancora=ancora).integro is True
+
+
+def test_auditoria_verifica_dez_mil_votos_contra_a_ancora_em_ate_dois_segundos():
+    # RNF-AUD-04: a eleição de referência do benchmarking (UCLouvain) teve cerca de
+    # 4.000 votantes por turno; 10.000 votos dão margem para eleições maiores.
+    log = LogDeAuditoria("eleicao-ca-2026")
+    log.registrar(TipoEvento.VOTACAO_ABERTA)
+    for numero in range(10_000):
+        opcao = "Chapa Renova" if numero % 2 else "Chapa Avanca"
+        log.registrar_voto(Voto(eleitor_id=f"ra_{numero}", opcao=opcao))
+    log.registrar(TipoEvento.VOTACAO_ENCERRADA)
+    ancora = log.resumo_encerramento()
+
+    inicio = time.perf_counter()
+    resultado = log.verificar_integridade(ancora=ancora)
+    duracao = time.perf_counter() - inicio
+
+    assert resultado.integro is True
+    assert ancora.total_votos == 10_000
+    assert duracao <= 2.0, f"A verificação levou {duracao:.2f} s; o limite é 2 s."
