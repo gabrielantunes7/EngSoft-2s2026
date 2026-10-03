@@ -329,6 +329,9 @@ class LogDeAuditoria:
         Basta comparar o hash na posição ancorada: como cada hash incorpora o anterior,
         ele resume todos os registros até ali. Alterar, remover ou inserir qualquer um
         deles — mesmo recalculando a cadeia — muda esse hash.
+
+        Depois da âncora a cadeia pode continuar, com a proclamação do resultado, mas não
+        pode receber votos: um voto ali entrou numa urna que a comissão já fechou.
         """
         if ancora.id_votacao != self.id_votacao:
             return ResultadoVerificacao(
@@ -350,6 +353,16 @@ class LogDeAuditoria:
                 indice_divergente=max(posicao, 0),
                 motivo="O registro de encerramento não corresponde à âncora.",
             )
+
+        for indice, registro in enumerate(
+            self._registros[ancora.total_registros :], start=ancora.total_registros
+        ):
+            if registro.evento == TipoEvento.VOTO_REGISTRADO:
+                return ResultadoVerificacao(
+                    integro=False,
+                    indice_divergente=indice,
+                    motivo="Há voto registrado depois do encerramento ancorado.",
+                )
 
         return ResultadoVerificacao(integro=True)
 

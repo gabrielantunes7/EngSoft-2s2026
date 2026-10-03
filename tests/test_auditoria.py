@@ -425,3 +425,25 @@ def test_auditoria_ancora_sem_registros_e_recusada():
 
     assert resultado.integro is False
     assert resultado.indice_divergente == 0
+
+
+def test_auditoria_voto_depois_do_encerramento_ancorado_e_recusado():
+    log = criar_log_de_eleicao()
+    ancora = log.resumo_encerramento()
+
+    log.registrar_voto(Voto(eleitor_id="ra_999999", opcao="Chapa Avanca"))
+    resultado = log.verificar_integridade(ancora=ancora)
+
+    assert log.verificar_integridade().integro is True
+    assert resultado.integro is False
+    assert resultado.indice_divergente == 6
+    assert resultado.motivo == "Há voto registrado depois do encerramento ancorado."
+
+
+def test_auditoria_proclamacao_depois_do_encerramento_ancorado_e_aceita():
+    log = criar_log_de_eleicao()
+    ancora = log.resumo_encerramento()
+
+    log.registrar(TipoEvento.RESULTADO_PROCLAMADO, {"vencedor_ou_decisao": "CHAPA RENOVA"})
+
+    assert log.verificar_integridade(ancora=ancora).integro is True
