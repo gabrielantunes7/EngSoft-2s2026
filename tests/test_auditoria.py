@@ -13,7 +13,13 @@ from itertools import pairwise
 import pytest
 
 import votacao
-from votacao.auditoria import HASH_GENESE, LogDeAuditoria, ResumoEncerramento, TipoEvento
+from votacao.auditoria import (
+    HASH_GENESE,
+    LogDeAuditoria,
+    RegistroAuditoria,
+    ResumoEncerramento,
+    TipoEvento,
+)
 from votacao.modelos import Voto
 from votacao.motor import MotorApuracao
 from votacao.regras import RegraCA
@@ -45,6 +51,28 @@ def criar_log_de_eleicao() -> LogDeAuditoria:
         log.registrar_voto(voto)
     log.registrar(TipoEvento.VOTACAO_ENCERRADA)
     return log
+
+
+def reescrever_cadeia(log: LogDeAuditoria, registros: list[RegistroAuditoria]) -> None:
+    """Simula o fraudador que refaz a cadeia inteira, recalculando todos os hashes.
+
+    Cada registro reescrito é coerente com o anterior, então a cadeia continua passando
+    na conferência interna — é o cenário que só a âncora de encerramento denuncia.
+    """
+    hash_anterior = HASH_GENESE
+    refeitos = []
+    for indice, registro in enumerate(registros):
+        refeito = RegistroAuditoria.criar(
+            indice=indice,
+            evento=registro.evento,
+            id_votacao=registro.id_votacao,
+            timestamp=registro.timestamp,
+            dados=registro.dados,
+            hash_anterior=hash_anterior,
+        )
+        refeitos.append(refeito)
+        hash_anterior = refeito.hash
+    log._registros = refeitos
 
 
 def test_auditoria_esta_exposta_na_api_do_pacote():
@@ -320,3 +348,80 @@ def test_auditoria_resumo_de_encerramento_sobrevive_a_ida_e_volta_em_json():
 def test_auditoria_resumo_de_encerramento_de_texto_invalido_e_recusado(texto):
     with pytest.raises(ValueError, match="não é um resumo de encerramento válido"):
         ResumoEncerramento.de_json(texto)
+
+
+def test_auditoria_cadeia_intacta_e_aprovada_contra_a_ancora():
+    log = criar_log_de_eleicao()
+    ancora = ResumoEncerramento.de_json(log.resumo_encerramento().para_json())
+
+    resultado = log.verificar_integridade(ancora=ancora)
+
+    assert resultado.integro is True
+    assert resultado.indice_divergente is None
+
+
+def test_auditoria_reescrita_completa_so_e_detectada_pela_ancora():
+    # Cenário da seção 6 do benchmarking (D-AUD-01): o fraudador troca um voto e
+    # recalcula a cadeia inteira. A conferência interna aprova; a âncora, não.
+    log = criar_log_de_eleicao()
+    ancora = log.resumo_encerramento()
+
+    registros = list(log.registros)
+    registros[2] = replace(registros[2], dados={"opcao": "Chapa Renova", "peso": 1})
+    reescrever_cadeia(log, registros)
+
+    assert log.verificar_integridade().integro is True
+    resultado = log.verificar_integridade(ancora=ancora)
+    assert resultado.integro is False
+    assert resultado.indice_divergente == 5
+    assert resultado.motivo is not None
+    assert "âncora" in resultado.motivo
+
+
+def test_auditoria_remocao_com_cadeia_recalculada_e_detectada_pela_ancora():
+    log = criar_log_de_eleicao()
+    ancora = log.resumo_encerramento()
+
+    registros = list(log.registros)
+    del registros[2]
+    reescrever_cadeia(log, registros)
+    resultado = log.verificar_integridade(ancora=ancora)
+
+    assert resultado.integro is False
+    assert resultado.indice_divergente == 5
+    assert resultado.motivo is not None
+    assert "menos registros" in resultado.motivo
+
+
+def test_auditoria_insercao_com_cadeia_recalculada_e_detectada_pela_ancora():
+    log = criar_log_de_eleicao()
+    ancora = log.resumo_encerramento()
+
+    registros = list(log.registros)
+    registros.insert(2, replace(registros[1], dados={"opcao": "Chapa Avanca", "peso": 1}))
+    reescrever_cadeia(log, registros)
+    resultado = log.verificar_integridade(ancora=ancora)
+
+    assert resultado.integro is False
+    assert resultado.indice_divergente == 5
+
+
+def test_auditoria_ancora_de_outra_votacao_e_recusada():
+    log = criar_log_de_eleicao()
+    outra = criar_log("eleicao-ca-2025")
+    outra.registrar(TipoEvento.VOTACAO_ENCERRADA)
+
+    resultado = log.verificar_integridade(ancora=outra.resumo_encerramento())
+
+    assert resultado.integro is False
+    assert resultado.motivo == "A âncora pertence a outra votação."
+
+
+def test_auditoria_ancora_sem_registros_e_recusada():
+    log = criar_log_de_eleicao()
+    ancora = replace(log.resumo_encerramento(), total_registros=0)
+
+    resultado = log.verificar_integridade(ancora=ancora)
+
+    assert resultado.integro is False
+    assert resultado.indice_divergente == 0

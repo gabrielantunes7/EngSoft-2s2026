@@ -273,12 +273,22 @@ class LogDeAuditoria:
             {"opcao": voto.opcao, "peso": voto.peso},
         )
 
-    def verificar_integridade(self) -> ResultadoVerificacao:
+    def verificar_integridade(
+        self, ancora: ResumoEncerramento | None = None
+    ) -> ResultadoVerificacao:
         """Percorre a cadeia conferindo a posição, o elo e o conteúdo de cada registro.
 
         A conferência para no primeiro problema encontrado: uma vez quebrada, a cadeia
         já não sustenta os registros seguintes, e o que interessa à auditoria é onde a
         quebra começou.
+
+        Sem âncora, a conferência só prova que a cadeia é coerente consigo mesma — o que
+        uma reescrita completa, com todos os hashes recalculados, também é. Com a âncora
+        guardada no encerramento, a cadeia precisa ainda reproduzir o hash ancorado.
+
+        Args:
+            ancora: Resumo emitido no encerramento e guardado fora do sistema, ou None
+                para conferir apenas a coerência interna.
 
         Returns:
             Resultado íntegro, ou o índice e o motivo da primeira divergência.
@@ -308,6 +318,38 @@ class LogDeAuditoria:
                 )
 
             hash_esperado = registro.hash
+
+        if ancora is not None:
+            return self._conferir_ancora(ancora)
+        return ResultadoVerificacao(integro=True)
+
+    def _conferir_ancora(self, ancora: ResumoEncerramento) -> ResultadoVerificacao:
+        """Confere uma cadeia já coerente contra a âncora guardada no encerramento.
+
+        Basta comparar o hash na posição ancorada: como cada hash incorpora o anterior,
+        ele resume todos os registros até ali. Alterar, remover ou inserir qualquer um
+        deles — mesmo recalculando a cadeia — muda esse hash.
+        """
+        if ancora.id_votacao != self.id_votacao:
+            return ResultadoVerificacao(
+                integro=False,
+                motivo="A âncora pertence a outra votação.",
+            )
+
+        posicao = ancora.total_registros - 1
+        if posicao >= len(self._registros):
+            return ResultadoVerificacao(
+                integro=False,
+                indice_divergente=len(self._registros),
+                motivo="O log tem menos registros do que os ancorados no encerramento.",
+            )
+
+        if posicao < 0 or self._registros[posicao].hash != ancora.hash_encerramento:
+            return ResultadoVerificacao(
+                integro=False,
+                indice_divergente=max(posicao, 0),
+                motivo="O registro de encerramento não corresponde à âncora.",
+            )
 
         return ResultadoVerificacao(integro=True)
 
