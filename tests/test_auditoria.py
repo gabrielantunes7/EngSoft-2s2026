@@ -82,11 +82,13 @@ def test_auditoria_esta_exposta_na_api_do_pacote():
         "LogDeAuditoria",
         "RegistroAuditoria",
         "ResultadoVerificacao",
+        "ResumoEncerramento",
         "TipoEvento",
     )
 
     assert all(nome in votacao.__all__ for nome in nomes)
     assert votacao.LogDeAuditoria is LogDeAuditoria
+    assert votacao.ResumoEncerramento is ResumoEncerramento
     assert votacao.HASH_GENESE == HASH_GENESE
     assert votacao.TipoEvento is TipoEvento
 

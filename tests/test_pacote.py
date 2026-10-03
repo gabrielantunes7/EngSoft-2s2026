@@ -37,6 +37,7 @@ def test_pacote_expoe_simbolos_principais():
         "RegraDeVotacao",
         "ResultadoApuracao",
         "ResultadoVerificacao",
+        "ResumoEncerramento",
         "ServicoElegibilidade",
         "ServicoProcuracao",
         "SessaoVotacao",
