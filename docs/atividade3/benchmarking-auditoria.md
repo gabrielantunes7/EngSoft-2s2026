@@ -108,10 +108,15 @@ print("2) adulteração simples:", log.verificar_integridade())
 ant, nova = HASH_GENESE, []
 for r in log.registros:
     n = RegistroAuditoria.criar(r.indice, r.evento, r.id_votacao, r.timestamp, r.dados, ant)
-    nova.append(n); ant = n.hash
+    nova.append(n)
+    ant = n.hash
 log._registros = nova
-print("3) cadeia reescrita:", log.verificar_integridade(),
-      "| protocolo original ainda presente?", log.contem_protocolo(p1))
+print(
+    "3) cadeia reescrita:",
+    log.verificar_integridade(),
+    "| protocolo original ainda presente?",
+    log.contem_protocolo(p1),
+)
 ```
 
 Saída obtida:
