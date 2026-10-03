@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -127,6 +127,55 @@ class ResultadoVerificacao:
     integro: bool
     indice_divergente: int | None = None
     motivo: str | None = None
+
+
+@dataclass(frozen=True)
+class ResumoEncerramento:
+    """Âncora de integridade emitida no encerramento de uma votação.
+
+    É o valor que a comissão eleitoral guarda fora do sistema — impresso ou entregue aos
+    fiscais, como o boletim de urna. Sozinha, a cadeia não resiste a quem a reescreve
+    inteira recalculando todos os hashes; conferida contra esta âncora, resiste, porque o
+    fraudador não alcança as cópias que já saíram do sistema.
+
+    Attributes:
+        id_votacao: Identificador da votação encerrada.
+        total_registros: Quantidade de registros da cadeia até o encerramento, inclusive.
+        hash_encerramento: Hash do registro VOTACAO_ENCERRADA.
+        total_votos: Quantidade de votos registrados até o encerramento.
+    """
+
+    id_votacao: str
+    total_registros: int
+    hash_encerramento: str
+    total_votos: int
+
+    def para_json(self) -> str:
+        """Serializa o resumo para ser impresso ou distribuído aos fiscais.
+
+        Returns:
+            Texto JSON com as chaves ordenadas, estável entre execuções.
+        """
+        return json.dumps(asdict(self), sort_keys=True, ensure_ascii=False)
+
+    @classmethod
+    def de_json(cls, texto: str) -> "ResumoEncerramento":
+        """Reconstrói o resumo guardado por um fiscal para conferir o log.
+
+        Args:
+            texto: JSON produzido por `para_json`.
+
+        Returns:
+            O resumo de encerramento correspondente.
+
+        Raises:
+            ValueError: Se o texto não for JSON ou não tiver exatamente os campos do resumo.
+        """
+        try:
+            return cls(**json.loads(texto))
+        except (json.JSONDecodeError, TypeError) as erro:
+            msg = "O texto informado não é um resumo de encerramento válido."
+            raise ValueError(msg) from erro
 
 
 class LogDeAuditoria:
@@ -294,3 +343,32 @@ class LogDeAuditoria:
             True se algum registro da cadeia tem esse hash, False caso contrário.
         """
         return any(registro.hash == protocolo for registro in self._registros)
+
+    def resumo_encerramento(self) -> ResumoEncerramento:
+        """Emite a âncora a ser guardada fora do sistema quando a votação é encerrada.
+
+        O resumo aponta para o primeiro registro VOTACAO_ENCERRADA. Registros posteriores,
+        como a proclamação do resultado, não alteram a âncora.
+
+        Returns:
+            Resumo com o hash do encerramento e os totais até ele.
+
+        Raises:
+            ValueError: Se a votação ainda não tiver sido encerrada no log.
+        """
+        for posicao, registro in enumerate(self._registros):
+            if registro.evento == TipoEvento.VOTACAO_ENCERRADA:
+                total_votos = sum(
+                    1
+                    for anterior in self._registros[:posicao]
+                    if anterior.evento == TipoEvento.VOTO_REGISTRADO
+                )
+                return ResumoEncerramento(
+                    id_votacao=self.id_votacao,
+                    total_registros=posicao + 1,
+                    hash_encerramento=registro.hash,
+                    total_votos=total_votos,
+                )
+
+        msg = "A votação ainda não foi encerrada: não há resumo de encerramento a emitir."
+        raise ValueError(msg)

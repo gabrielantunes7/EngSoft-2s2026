@@ -13,7 +13,7 @@ from itertools import pairwise
 import pytest
 
 import votacao
-from votacao.auditoria import HASH_GENESE, LogDeAuditoria, TipoEvento
+from votacao.auditoria import HASH_GENESE, LogDeAuditoria, ResumoEncerramento, TipoEvento
 from votacao.modelos import Voto
 from votacao.motor import MotorApuracao
 from votacao.regras import RegraCA
@@ -276,3 +276,47 @@ def test_auditoria_permite_reconferir_a_contagem_apurada():
     assert log.verificar_integridade().integro is True
     assert contagem_do_log == resultado.contagem_por_opcao
     assert resultado.vencedor_ou_decisao == "CHAPA RENOVA"
+
+
+def test_auditoria_resumo_de_encerramento_ancora_o_registro_de_encerramento():
+    log = criar_log_de_eleicao()
+
+    resumo = log.resumo_encerramento()
+
+    assert resumo.id_votacao == "eleicao-ca-2026"
+    assert resumo.total_registros == 6
+    assert resumo.hash_encerramento == log.registros[5].hash
+    assert resumo.total_votos == len(VOTOS_DA_ELEICAO)
+
+
+def test_auditoria_resumo_de_encerramento_antes_do_encerramento_e_recusado():
+    log = criar_log()
+    log.registrar(TipoEvento.VOTACAO_ABERTA)
+    log.registrar_voto(VOTOS_DA_ELEICAO[0])
+
+    with pytest.raises(ValueError, match="ainda não foi encerrada"):
+        log.resumo_encerramento()
+
+
+def test_auditoria_resumo_de_encerramento_ignora_registros_posteriores():
+    log = criar_log_de_eleicao()
+    antes = log.resumo_encerramento()
+
+    log.registrar(TipoEvento.RESULTADO_PROCLAMADO, {"vencedor_ou_decisao": "CHAPA RENOVA"})
+
+    assert log.resumo_encerramento() == antes
+
+
+def test_auditoria_resumo_de_encerramento_sobrevive_a_ida_e_volta_em_json():
+    resumo = criar_log_de_eleicao().resumo_encerramento()
+
+    texto = resumo.para_json()
+
+    assert ResumoEncerramento.de_json(texto) == resumo
+    assert texto == resumo.para_json()
+
+
+@pytest.mark.parametrize("texto", ["não é json", "[]", "{}", '{"id_votacao": "x"}'])
+def test_auditoria_resumo_de_encerramento_de_texto_invalido_e_recusado(texto):
+    with pytest.raises(ValueError, match="não é um resumo de encerramento válido"):
+        ResumoEncerramento.de_json(texto)
