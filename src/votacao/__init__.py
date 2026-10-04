@@ -5,6 +5,7 @@ from votacao.auditoria import (
     LogDeAuditoria,
     RegistroAuditoria,
     ResultadoVerificacao,
+    ResumoEncerramento,
     TipoEvento,
 )
 from votacao.dados.assembleia import Procurador
@@ -75,6 +76,7 @@ __all__ = [
     "RegraDeVotacao",
     "ResultadoApuracao",
     "ResultadoVerificacao",
+    "ResumoEncerramento",
     "ServicoElegibilidade",
     "ServicoProcuracao",
     "SessaoVotacao",

@@ -5,6 +5,7 @@ fraudador com acesso ao armazenamento, que altera os registros sem passar pela A
 log. É exatamente esse cenário que o encadeamento por hash existe para denunciar.
 """
 
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -13,7 +14,13 @@ from itertools import pairwise
 import pytest
 
 import votacao
-from votacao.auditoria import HASH_GENESE, LogDeAuditoria, TipoEvento
+from votacao.auditoria import (
+    HASH_GENESE,
+    LogDeAuditoria,
+    RegistroAuditoria,
+    ResumoEncerramento,
+    TipoEvento,
+)
 from votacao.modelos import Voto
 from votacao.motor import MotorApuracao
 from votacao.regras import RegraCA
@@ -47,17 +54,41 @@ def criar_log_de_eleicao() -> LogDeAuditoria:
     return log
 
 
+def reescrever_cadeia(log: LogDeAuditoria, registros: list[RegistroAuditoria]) -> None:
+    """Simula o fraudador que refaz a cadeia inteira, recalculando todos os hashes.
+
+    Cada registro reescrito é coerente com o anterior, então a cadeia continua passando
+    na conferência interna — é o cenário que só a âncora de encerramento denuncia.
+    """
+    hash_anterior = HASH_GENESE
+    refeitos = []
+    for indice, registro in enumerate(registros):
+        refeito = RegistroAuditoria.criar(
+            indice=indice,
+            evento=registro.evento,
+            id_votacao=registro.id_votacao,
+            timestamp=registro.timestamp,
+            dados=registro.dados,
+            hash_anterior=hash_anterior,
+        )
+        refeitos.append(refeito)
+        hash_anterior = refeito.hash
+    log._registros = refeitos
+
+
 def test_auditoria_esta_exposta_na_api_do_pacote():
     nomes = (
         "HASH_GENESE",
         "LogDeAuditoria",
         "RegistroAuditoria",
         "ResultadoVerificacao",
+        "ResumoEncerramento",
         "TipoEvento",
     )
 
     assert all(nome in votacao.__all__ for nome in nomes)
     assert votacao.LogDeAuditoria is LogDeAuditoria
+    assert votacao.ResumoEncerramento is ResumoEncerramento
     assert votacao.HASH_GENESE == HASH_GENESE
     assert votacao.TipoEvento is TipoEvento
 
@@ -276,3 +307,166 @@ def test_auditoria_permite_reconferir_a_contagem_apurada():
     assert log.verificar_integridade().integro is True
     assert contagem_do_log == resultado.contagem_por_opcao
     assert resultado.vencedor_ou_decisao == "CHAPA RENOVA"
+
+
+def test_auditoria_resumo_de_encerramento_ancora_o_registro_de_encerramento():
+    log = criar_log_de_eleicao()
+
+    resumo = log.resumo_encerramento()
+
+    assert resumo.id_votacao == "eleicao-ca-2026"
+    assert resumo.total_registros == 6
+    assert resumo.hash_encerramento == log.registros[5].hash
+    assert resumo.total_votos == len(VOTOS_DA_ELEICAO)
+
+
+def test_auditoria_resumo_de_encerramento_antes_do_encerramento_e_recusado():
+    log = criar_log()
+    log.registrar(TipoEvento.VOTACAO_ABERTA)
+    log.registrar_voto(VOTOS_DA_ELEICAO[0])
+
+    with pytest.raises(ValueError, match="ainda não foi encerrada"):
+        log.resumo_encerramento()
+
+
+def test_auditoria_resumo_de_encerramento_ignora_registros_posteriores():
+    log = criar_log_de_eleicao()
+    antes = log.resumo_encerramento()
+
+    log.registrar(TipoEvento.RESULTADO_PROCLAMADO, {"vencedor_ou_decisao": "CHAPA RENOVA"})
+
+    assert log.resumo_encerramento() == antes
+
+
+def test_auditoria_resumo_de_encerramento_sobrevive_a_ida_e_volta_em_json():
+    resumo = criar_log_de_eleicao().resumo_encerramento()
+
+    texto = resumo.para_json()
+
+    assert ResumoEncerramento.de_json(texto) == resumo
+    assert texto == resumo.para_json()
+
+
+@pytest.mark.parametrize("texto", ["não é json", "[]", "{}", '{"id_votacao": "x"}'])
+def test_auditoria_resumo_de_encerramento_de_texto_invalido_e_recusado(texto):
+    with pytest.raises(ValueError, match="não é um resumo de encerramento válido"):
+        ResumoEncerramento.de_json(texto)
+
+
+def test_auditoria_cadeia_intacta_e_aprovada_contra_a_ancora():
+    log = criar_log_de_eleicao()
+    ancora = ResumoEncerramento.de_json(log.resumo_encerramento().para_json())
+
+    resultado = log.verificar_integridade(ancora=ancora)
+
+    assert resultado.integro is True
+    assert resultado.indice_divergente is None
+
+
+def test_auditoria_reescrita_completa_so_e_detectada_pela_ancora():
+    # Cenário da seção 6 do benchmarking (D-AUD-01): o fraudador troca um voto e
+    # recalcula a cadeia inteira. A conferência interna aprova; a âncora, não.
+    log = criar_log_de_eleicao()
+    ancora = log.resumo_encerramento()
+
+    registros = list(log.registros)
+    registros[2] = replace(registros[2], dados={"opcao": "Chapa Renova", "peso": 1})
+    reescrever_cadeia(log, registros)
+
+    assert log.verificar_integridade().integro is True
+    resultado = log.verificar_integridade(ancora=ancora)
+    assert resultado.integro is False
+    assert resultado.indice_divergente == 5
+    assert resultado.motivo is not None
+    assert "âncora" in resultado.motivo
+
+
+def test_auditoria_remocao_com_cadeia_recalculada_e_detectada_pela_ancora():
+    log = criar_log_de_eleicao()
+    ancora = log.resumo_encerramento()
+
+    registros = list(log.registros)
+    del registros[2]
+    reescrever_cadeia(log, registros)
+    resultado = log.verificar_integridade(ancora=ancora)
+
+    assert resultado.integro is False
+    assert resultado.indice_divergente == 5
+    assert resultado.motivo is not None
+    assert "menos registros" in resultado.motivo
+
+
+def test_auditoria_insercao_com_cadeia_recalculada_e_detectada_pela_ancora():
+    log = criar_log_de_eleicao()
+    ancora = log.resumo_encerramento()
+
+    registros = list(log.registros)
+    registros.insert(2, replace(registros[1], dados={"opcao": "Chapa Avanca", "peso": 1}))
+    reescrever_cadeia(log, registros)
+    resultado = log.verificar_integridade(ancora=ancora)
+
+    assert resultado.integro is False
+    assert resultado.indice_divergente == 5
+
+
+def test_auditoria_ancora_de_outra_votacao_e_recusada():
+    log = criar_log_de_eleicao()
+    outra = criar_log("eleicao-ca-2025")
+    outra.registrar(TipoEvento.VOTACAO_ENCERRADA)
+
+    resultado = log.verificar_integridade(ancora=outra.resumo_encerramento())
+
+    assert resultado.integro is False
+    assert resultado.motivo == "A âncora pertence a outra votação."
+
+
+def test_auditoria_ancora_sem_registros_e_recusada():
+    log = criar_log_de_eleicao()
+    ancora = replace(log.resumo_encerramento(), total_registros=0)
+
+    resultado = log.verificar_integridade(ancora=ancora)
+
+    assert resultado.integro is False
+    assert resultado.indice_divergente == 0
+
+
+def test_auditoria_voto_depois_do_encerramento_ancorado_e_recusado():
+    log = criar_log_de_eleicao()
+    ancora = log.resumo_encerramento()
+
+    log.registrar_voto(Voto(eleitor_id="ra_999999", opcao="Chapa Avanca"))
+    resultado = log.verificar_integridade(ancora=ancora)
+
+    assert log.verificar_integridade().integro is True
+    assert resultado.integro is False
+    assert resultado.indice_divergente == 6
+    assert resultado.motivo == "Há voto registrado depois do encerramento ancorado."
+
+
+def test_auditoria_proclamacao_depois_do_encerramento_ancorado_e_aceita():
+    log = criar_log_de_eleicao()
+    ancora = log.resumo_encerramento()
+
+    log.registrar(TipoEvento.RESULTADO_PROCLAMADO, {"vencedor_ou_decisao": "CHAPA RENOVA"})
+
+    assert log.verificar_integridade(ancora=ancora).integro is True
+
+
+def test_auditoria_verifica_dez_mil_votos_contra_a_ancora_em_ate_dois_segundos():
+    # RNF-AUD-04: a eleição de referência do benchmarking (UCLouvain) teve cerca de
+    # 4.000 votantes por turno; 10.000 votos dão margem para eleições maiores.
+    log = LogDeAuditoria("eleicao-ca-2026")
+    log.registrar(TipoEvento.VOTACAO_ABERTA)
+    for numero in range(10_000):
+        opcao = "Chapa Renova" if numero % 2 else "Chapa Avanca"
+        log.registrar_voto(Voto(eleitor_id=f"ra_{numero}", opcao=opcao))
+    log.registrar(TipoEvento.VOTACAO_ENCERRADA)
+    ancora = log.resumo_encerramento()
+
+    inicio = time.perf_counter()
+    resultado = log.verificar_integridade(ancora=ancora)
+    duracao = time.perf_counter() - inicio
+
+    assert resultado.integro is True
+    assert ancora.total_votos == 10_000
+    assert duracao <= 2.0, f"A verificação levou {duracao:.2f} s; o limite é 2 s."
