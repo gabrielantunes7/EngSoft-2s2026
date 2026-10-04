@@ -113,7 +113,7 @@ está — porque é dessa informação que depende quem tem direito a voto.
 |---|---|---|
 | **A Casa revisora emenda o texto** | O projeto **volta à Casa iniciadora**, que aprecia apenas as emendas (CF art. 65, § único). É a hipótese mais comum em matéria relevante. | Não existe. `registrar_resultado` só recebe a sessão apurada; não há como informar que a aprovação veio com emenda, e a aprovação na revisora conclui o rito (evidência E1) |
 | **A matéria é rejeitada** | Arquiva-se, e a mesma matéria só volta na mesma sessão legislativa mediante proposta da maioria absoluta (CF art. 67); para PEC, não volta de forma alguma (art. 60, § 5º) | A tramitação vira `REJEITADA`, mas nada impede instanciar outra idêntica no instante seguinte (evidência E2) |
-| **A sessão não atinge quórum** | Não há deliberação; a sessão não se instala e a matéria permanece na mesma etapa | Tratado corretamente: a sessão entra no histórico como inválida e a etapa se mantém (`RegistroTramitacao.valida`) |
+| **A sessão não atinge quórum** | Não há deliberação; a sessão não se instala e a matéria permanece na mesma etapa | Tratado corretamente do lado da tramitação: a sessão entra no histórico como inválida e a etapa se mantém (`RegistroTramitacao.valida`). A sessão em si, porém, chega a deliberar antes de descobrir que não podia — ver J2 e D-RITO-03 |
 | **Os dois turnos são convocados sem intervalo** | O interstício de cinco sessões é exigido e só se dispensa por requerimento de líderes aprovado (RICD art. 202, § 6º) | Os dois turnos podem ocorrer no mesmo instante, sem recusa e sem registro de dispensa (evidência E3) |
 | **A matéria é retirada de pauta ou arquivada** | Decisão do autor ou da Mesa, a qualquer tempo | Não existe: só se sai de `EM_TRAMITACAO` por aprovação ou rejeição (recolhido em D-RITO-05, que depende do mesmo conceito de matéria arquivada) |
 
@@ -251,7 +251,7 @@ O que a saída mostra:
 | **D-RITO-03** | Deliberação exige presença da maioria absoluta dos membros (CF art. 47). O quórum é aferido só na apuração, a partir dos votos, e a sessão já encerrada (E4). | F1, P0 | Quórum é condição de abertura. Aferi-lo no fim transforma um impedimento em um resultado, e desperdiça os votos colhidos. |
 | **D-RITO-04** | Sessões reais são suspensas e retomadas; votações viciadas são anuladas. A máquina de estados é estritamente progressiva e não tem nem suspensão nem anulação (E5). | F4, P0 | Sem suspensão, qualquer interrupção obriga a abandonar a sessão e convocar outra, o que o histórico registra como se fossem deliberações distintas. |
 | **D-RITO-05** | Matéria rejeitada só volta na mesma sessão legislativa mediante maioria absoluta (CF art. 67); PEC rejeitada não volta (art. 60, § 5º). Nada impede reinstanciar a tramitação (E2). Pelo mesmo motivo, não há como arquivar uma matéria ou retirá-la de pauta: só se sai de `EM_TRAMITACAO` por aprovação ou rejeição. | F1, P0 | Falta a noção de sessão legislativa e de matéria arquivada, sem as quais nem a irrepetibilidade nem o arquivamento são representáveis. As duas dependem do mesmo conceito, e por isso são uma descoberta só. |
-| **D-RITO-06** | Os dois turnos de PEC exigem interstício de cinco sessões, dispensável por requerimento de líderes aprovado (RICD art. 202, § 6º). Os turnos podem ser consecutivos, sem registro de dispensa (E3). | F2, P0 | Depende de uma noção de calendário de sessões que o projeto não tem; menos grave que as demais e candidata natural a backlog futuro. |
+| **D-RITO-06** | Os dois turnos de PEC exigem interstício de cinco sessões, dispensável por requerimento de líderes aprovado (RICD art. 202, § 6º). Os turnos podem ser consecutivos, sem registro de dispensa (E3). | F2, P0 | Furar o interstício não invalida a PEC: ela segue aprovada nos dois turnos e pelo quórum certo. O que se perde é o intervalo de reflexão entre as votações, não a validade do que foi decidido. Some-se a isso ser regra de regimento, que o próprio regimento deixa dispensar por acordo de líderes, e o caso não compete com os outros cinco. Fica para o backlog. |
 
 ## 8. Conflitos, dependências e ambiguidades
 
@@ -259,6 +259,9 @@ Esta etapa levantou o conflito entre **fidelidade ao rito e simplicidade do mode
 mais etapas constitucionais o sistema representa, mais distante ele fica de uma biblioteca de
 votação genérica, reutilizável nos contextos de CA e assembleia. Levantou também a
 dependência entre a aferição de quórum e o módulo de regras, que pertence a outro integrante.
+E apareceu uma ambiguidade de vocabulário: "sessão" quer dizer três coisas diferentes neste
+domínio — a votação que o código chama de `SessaoVotacao`, a reunião de Plenário em que o
+interstício é contado, e o período anual de que depende a irrepetibilidade.
 A análise e o tratamento de cada ponto estão no arquivo `rastreabilidade-sessao-tramitacao.md`,
 tópico 3.
 
