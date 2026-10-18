@@ -18,6 +18,14 @@ from votacao.elegibilidade.validador_ca import ValidadorElegibilidadeCA
 from votacao.elegibilidade.validador_congresso import (
     ValidadorElegibilidadeCongresso,
 )
+from votacao.fabricas import (
+    FabricaAssembleia,
+    FabricaCA,
+    FabricaCongresso,
+    FabricaContextoVotacao,
+    obter_fabrica_contexto,
+    registrar_fabrica_contexto,
+)
 from votacao.modelos import (
     AptidaoVoto,
     CasaLegislativa,
@@ -63,6 +71,10 @@ __all__ = [
     "CasaLegislativa",
     "ElegibilidadeCandidato",
     "EstadoSessao",
+    "FabricaAssembleia",
+    "FabricaCA",
+    "FabricaCongresso",
+    "FabricaContextoVotacao",
     "LogDeAuditoria",
     "MotorApuracao",
     "PoderDeVoto",
@@ -95,4 +107,6 @@ __all__ = [
     "Voto",
     "VotoRecusadoError",
     "__version__",
+    "obter_fabrica_contexto",
+    "registrar_fabrica_contexto",
 ]
