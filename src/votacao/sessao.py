@@ -103,7 +103,7 @@ class SessaoVotacao:
         self.regra = regra
         self.total_aptos = total_aptos
         self._observadores: list[ObservadorSessao] = []
-        self._observador_auditoria: ObservadorAuditoria | None = None
+        self._log = log
 
         if log is not None:
             self.adicionar_observador(ObservadorAuditoria(log))
@@ -122,10 +122,8 @@ class SessaoVotacao:
 
     @property
     def log(self) -> LogDeAuditoria | None:
-        """Log de auditoria registrado, ou None caso não haja observador de auditoria."""
-        if self._observador_auditoria is not None:
-            return self._observador_auditoria.log
-        return None
+        """Log de auditoria configurado na sessão, se houver."""
+        return self._log
 
     @property
     def observadores(self) -> tuple[ObservadorSessao, ...]:
@@ -140,26 +138,13 @@ class SessaoVotacao:
 
         Raises:
             TypeError: Se o objeto não implementar ObservadorSessao.
-            ValueError: Se for um ObservadorAuditoria pertencente a outra votação.
         """
         if not isinstance(observador, ObservadorSessao):
             msg = "O observador deve implementar a interface ObservadorSessao."
             raise TypeError(msg)
 
-        if (
-            isinstance(observador, ObservadorAuditoria)
-            and observador.log.id_votacao != self.id_sessao
-        ):
-            msg = (
-                f"O observador de auditoria pertence à votação '{observador.log.id_votacao}', "
-                f"não à sessão '{self.id_sessao}'."
-            )
-            raise ValueError(msg)
-
         if observador not in self._observadores:
             self._observadores.append(observador)
-            if isinstance(observador, ObservadorAuditoria) and self._observador_auditoria is None:
-                self._observador_auditoria = observador
 
     def remover_observador(self, observador: ObservadorSessao) -> bool:
         """Remove um observador registrado da sessão.
@@ -169,11 +154,12 @@ class SessaoVotacao:
         """
         if observador in self._observadores:
             self._observadores.remove(observador)
-            if observador is self._observador_auditoria:
-                remanescentes = [
-                    obs for obs in self._observadores if isinstance(obs, ObservadorAuditoria)
-                ]
-                self._observador_auditoria = remanescentes[0] if remanescentes else None
+            if (
+                self._log is not None
+                and isinstance(observador, ObservadorAuditoria)
+                and observador.log is self._log
+            ):
+                self._log = None
             return True
         return False
 
@@ -221,6 +207,7 @@ class SessaoVotacao:
             ValueError: Se o início for posterior ao fim.
             TransicaoInvalidaError: Se a sessão não estiver em ABERTA.
         """
+        self._exigir_estado(EstadoSessao.ABERTA, operacao="passar a EM_VOTACAO")
         if inicio is not None and fim is not None and inicio > fim:
             msg = "O início da janela de votação não pode ser posterior ao fim."
             raise ValueError(msg)

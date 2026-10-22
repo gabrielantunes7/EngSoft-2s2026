@@ -27,8 +27,6 @@ def test_pacote_expoe_simbolos_principais():
         "LogDeAuditoria",
         "MotorApuracao",
         "ObservadorAuditoria",
-        "ObservadorCallback",
-        "ObservadorRegistroMemoria",
         "ObservadorSessao",
         "PoderDeVoto",
         "ProcuracaoInvalidaError",

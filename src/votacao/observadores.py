@@ -1,7 +1,7 @@
 """Padrão Observer para o ciclo de vida e eventos de sessões de votação."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from votacao.auditoria import LogDeAuditoria, TipoEvento
@@ -85,85 +85,3 @@ class ObservadorAuditoria(ObservadorSessao):
         """Registra o voto na cadeia e devolve o hash resultante como comprovante."""
         registro = self.log.registrar_voto(voto)
         return registro.hash
-
-
-class ObservadorRegistroMemoria(ObservadorSessao):
-    """Observador espião em memória para testes, monitoramento e telemetria.
-
-    Attributes:
-        eventos: Lista cronológica de transições e eventos recebidos.
-        votos: Lista cronológica de votos registrados.
-    """
-
-    def __init__(self) -> None:
-        self.eventos: list[dict[str, Any]] = []
-        self.votos: list[Voto] = []
-
-    def ao_mudar_estado(
-        self,
-        sessao: "SessaoVotacao",
-        estado_anterior: "EstadoSessao",
-        novo_estado: "EstadoSessao",
-        evento: TipoEvento | None = None,
-        dados: Mapping[str, Any] | None = None,
-    ) -> None:
-        """Acumula o evento de estado em memória."""
-        self.eventos.append(
-            {
-                "sessao_id": sessao.id_sessao,
-                "estado_anterior": estado_anterior,
-                "novo_estado": novo_estado,
-                "evento": evento,
-                "dados": dict(dados or {}),
-            }
-        )
-
-    def ao_registrar_voto(
-        self,
-        sessao: "SessaoVotacao",
-        voto: Voto,
-    ) -> str | None:
-        """Acumula o voto em memória."""
-        self.votos.append(voto)
-        return None
-
-
-class ObservadorCallback(ObservadorSessao):
-    """Observador flexível que executa callbacks funcionais injetados.
-
-    Útil para integrações pontuais, emissão de métricas ou envio de notificações externas.
-    """
-
-    def __init__(
-        self,
-        quando_mudar_estado: Callable[..., Any] | None = None,
-        quando_registrar_voto: Callable[[Voto], Any] | None = None,
-    ) -> None:
-        self.quando_mudar_estado = quando_mudar_estado
-        self.quando_registrar_voto = quando_registrar_voto
-
-    def ao_mudar_estado(
-        self,
-        sessao: "SessaoVotacao",
-        estado_anterior: "EstadoSessao",
-        novo_estado: "EstadoSessao",
-        evento: TipoEvento | None = None,
-        dados: Mapping[str, Any] | None = None,
-    ) -> None:
-        if self.quando_mudar_estado is not None:
-            self.quando_mudar_estado(
-                sessao=sessao,
-                estado_anterior=estado_anterior,
-                novo_estado=novo_estado,
-                evento=evento,
-                dados=dados or {},
-            )
-
-    def ao_registrar_voto(
-        self,
-        sessao: "SessaoVotacao",
-        voto: Voto,
-    ) -> str | None:
-        if self.quando_registrar_voto is not None:
-            self.quando_registrar_voto(voto)
-        return None

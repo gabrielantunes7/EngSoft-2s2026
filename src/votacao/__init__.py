@@ -32,8 +32,6 @@ from votacao.modelos import (
 from votacao.motor import MotorApuracao
 from votacao.observadores import (
     ObservadorAuditoria,
-    ObservadorCallback,
-    ObservadorRegistroMemoria,
     ObservadorSessao,
 )
 from votacao.procuracoes import (
@@ -72,8 +70,6 @@ __all__ = [
     "LogDeAuditoria",
     "MotorApuracao",
     "ObservadorAuditoria",
-    "ObservadorCallback",
-    "ObservadorRegistroMemoria",
     "ObservadorSessao",
     "PoderDeVoto",
     "ProcuracaoInvalidaError",
