@@ -1,11 +1,70 @@
 """Validador de elegibilidade para deliberações parlamentares no Congresso Nacional."""
 
+from datetime import datetime
+from typing import Any, ClassVar
+
 from votacao.dados.congresso import RepositorioCongresso
-from votacao.modelos import AptidaoVoto, CasaLegislativa, ElegibilidadeCandidato
+from votacao.elegibilidade.base import ValidadorContexto
+from votacao.modelos import AptidaoVoto, CasaLegislativa, ElegibilidadeCandidato, Usuario
 
 
-class ValidadorElegibilidadeCongresso:
+class ValidadorElegibilidadeCongresso(ValidadorContexto):
     """Valida aptidão de parlamentares para votação e pauta de matérias legislativas."""
+
+    OPCOES_PADRAO: ClassVar[set[str]] = {"SIM", "NAO", "ABSTENCAO", "BRANCO"}
+
+    def autenticar(self, identificador: str, repo: Any) -> Usuario | None:
+        """Autentica o parlamentar no cadastro funcional do Congresso."""
+        parlamentar = repo.obter_parlamentar(identificador.strip())
+        if parlamentar is None:
+            return None
+        ativo = parlamentar.em_exercicio and not parlamentar.licenciado and not parlamentar.suspenso
+        casa_sigla = "camara" if parlamentar.casa == CasaLegislativa.CAMARA else "senado"
+        return Usuario(
+            id=parlamentar.id,
+            nome=parlamentar.nome,
+            email=f"{parlamentar.id.lower()}@{casa_sigla}.leg.br",
+            ativo=ativo,
+        )
+
+    def consultar_aptidao(
+        self,
+        eleitor_id: str,
+        repo: Any,
+        *,
+        casa: CasaLegislativa | None = None,
+        procurador_id: str | None = None,
+        momento: datetime | None = None,
+    ) -> AptidaoVoto:
+        """Consulta centralizada de aptidão do parlamentar ao voto na Casa especificada."""
+        if casa is None:
+            msg = "Para consulta no contexto CONGRESSO, a CasaLegislativa deve ser informada."
+            raise ValueError(msg)
+        return self.validar_eleitor(
+            parlamentar_id=eleitor_id,
+            casa_votacao=casa,
+            repo=repo,
+        )
+
+    def validar_opcao(
+        self,
+        opcao_ou_candidato: str,
+        repo: Any,
+        *,
+        casa: CasaLegislativa | None = None,
+    ) -> ElegibilidadeCandidato:
+        """Valida se a opção é voto parlamentar padrão ou matéria pautada."""
+        if casa is None:
+            msg = "Para validação no contexto CONGRESSO, a CasaLegislativa deve ser informada."
+            raise ValueError(msg)
+        opcao_norm = opcao_ou_candidato.strip().upper()
+        if opcao_norm in self.OPCOES_PADRAO:
+            return ElegibilidadeCandidato(elegivel=True, detalhes={"tipo": "voto_parlamentar"})
+        return self.validar_materia(
+            materia_id=opcao_ou_candidato,
+            casa_votacao=casa,
+            repo=repo,
+        )
 
     @staticmethod
     def validar_eleitor(

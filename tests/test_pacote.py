@@ -23,6 +23,10 @@ def test_pacote_expoe_simbolos_principais():
         "CasaLegislativa",
         "ElegibilidadeCandidato",
         "EstadoSessao",
+        "FabricaAssembleia",
+        "FabricaCA",
+        "FabricaCongresso",
+        "FabricaContextoVotacao",
         "HASH_GENESE",
         "LogDeAuditoria",
         "MotorApuracao",
@@ -50,12 +54,16 @@ def test_pacote_expoe_simbolos_principais():
         "TramitacaoLegislativa",
         "TransicaoInvalidaError",
         "Usuario",
+        "ValidadorContexto",
         "ValidadorElegibilidadeAssembleia",
         "ValidadorElegibilidadeCA",
         "ValidadorElegibilidadeCongresso",
         "Voto",
         "VotoRecusadoError",
         "__version__",
+        "obter_fabrica_contexto",
+        "registrar_fabrica_contexto",
+        "remover_fabrica_contexto",
     ]
     for simbolo in simbolos_esperados:
         assert hasattr(votacao, simbolo), f"Símbolo '{simbolo}' não encontrado em votacao."

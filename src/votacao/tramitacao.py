@@ -8,13 +8,13 @@ from typing import ClassVar
 
 from votacao.auditoria import LogDeAuditoria
 from votacao.dados.congresso import RepositorioCongresso
+from votacao.fabricas.congresso import FabricaCongresso
 from votacao.modelos import (
     CasaLegislativa,
     ResultadoApuracao,
     StatusResultado,
     TipoMateriaCongresso,
 )
-from votacao.regras.congresso import RegraCongresso
 from votacao.sessao import EstadoSessao, SessaoVotacao
 
 
@@ -172,11 +172,11 @@ class TramitacaoLegislativa:
         """
         self._exigir_em_tramitacao(operacao="convocar sessão")
 
-        regra = RegraCongresso(materia=self.tipo, casa=self._casa_atual)
-        sessao = SessaoVotacao(
-            self.id_proxima_sessao,
-            regra,
-            total_aptos=regra.total_membros,
+        fabrica = FabricaCongresso()
+        sessao = fabrica.criar_sessao(
+            id_sessao=self.id_proxima_sessao,
+            materia=self.tipo,
+            casa=self._casa_atual,
             log=log,
             relogio=relogio,
         )
