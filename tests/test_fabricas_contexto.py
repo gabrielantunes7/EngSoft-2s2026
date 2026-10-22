@@ -1,7 +1,5 @@
 """Testes do padrão Abstract Factory para criação de famílias de componentes eleitorais."""
 
-from typing import Any
-
 import pytest
 
 from votacao.dados.assembleia import RepositorioAssembleia
@@ -19,8 +17,10 @@ from votacao.fabricas import (
     FabricaCA,
     FabricaCongresso,
     FabricaContextoVotacao,
+    ValidadorContexto,
     obter_fabrica_contexto,
     registrar_fabrica_contexto,
+    remover_fabrica_contexto,
 )
 from votacao.modelos import (
     CasaLegislativa,
@@ -32,7 +32,9 @@ from votacao.modelos import (
 from votacao.regras.assembleia import RegraAssembleia
 from votacao.regras.ca import RegraCA
 from votacao.regras.congresso import RegraCongresso
+from votacao.servicos import ServicoElegibilidade
 from votacao.sessao import EstadoSessao, SessaoVotacao
+from votacao.tramitacao import TramitacaoLegislativa
 
 
 def test_fabrica_ca_cria_familia_coesa():
@@ -46,6 +48,7 @@ def test_fabrica_ca_cria_familia_coesa():
 
     validador = fabrica.criar_validador()
     assert isinstance(validador, ValidadorElegibilidadeCA)
+    assert isinstance(validador, ValidadorContexto)
 
     repo_vazio = fabrica.criar_repositorio(popular=False)
     assert isinstance(repo_vazio, RepositorioCA)
@@ -68,6 +71,12 @@ def test_fabrica_ca_cria_familia_coesa():
     resultado = sessao.apurar()
     assert resultado.status == StatusResultado.ELEITO
     assert resultado.vencedor_ou_decisao == "CHAPA 1"
+
+
+def test_fabrica_ca_rejeita_argumentos_incorretos():
+    fabrica = FabricaCA()
+    with pytest.raises(TypeError):
+        fabrica.criar_sessao("CA-1", quorum_minimo=5)  # Typo deve falhar e não ser engolido
 
 
 def test_fabrica_ca_sessao_com_regra_previa():
@@ -93,6 +102,7 @@ def test_fabrica_assembleia_cria_familia_coesa():
 
     validador = fabrica.criar_validador()
     assert isinstance(validador, ValidadorElegibilidadeAssembleia)
+    assert isinstance(validador, ValidadorContexto)
 
     repo_vazio = fabrica.criar_repositorio(popular=False)
     assert isinstance(repo_vazio, RepositorioAssembleia)
@@ -143,6 +153,7 @@ def test_fabrica_congresso_cria_familia_coesa():
 
     validador = fabrica.criar_validador()
     assert isinstance(validador, ValidadorElegibilidadeCongresso)
+    assert isinstance(validador, ValidadorContexto)
 
     repo_vazio = fabrica.criar_repositorio(popular=False)
     assert isinstance(repo_vazio, RepositorioCongresso)
@@ -152,7 +163,6 @@ def test_fabrica_congresso_cria_familia_coesa():
     assert isinstance(repo_populado, RepositorioCongresso)
     assert len(repo_populado.listar_parlamentares()) > 0
 
-    # Sessão usa automaticamente total constitucional de membros quando total_aptos=0
     sessao = fabrica.criar_sessao(
         "PL-TESTE",
         materia=TipoMateriaCongresso.LEI_ORDINARIA,
@@ -169,6 +179,31 @@ def test_fabrica_congresso_sessao_com_regra_previa():
     regra_costumizada = RegraCongresso(materia=TipoMateriaCongresso.LEI_COMPLEMENTAR)
     sessao = fabrica.criar_sessao("PLC-CUSTOM", regra=regra_costumizada)
     assert sessao.regra is regra_costumizada
+
+
+def test_tramitacao_utiliza_fabrica_congresso():
+    tramitacao = TramitacaoLegislativa("PL-42", TipoMateriaCongresso.LEI_ORDINARIA)
+    sessao = tramitacao.nova_sessao()
+    assert isinstance(sessao, SessaoVotacao)
+    assert isinstance(sessao.regra, RegraCongresso)
+    assert sessao.regra.casa == CasaLegislativa.CAMARA
+
+
+def test_servico_elegibilidade_utiliza_fabricas_polimorficas():
+    servico = ServicoElegibilidade()
+
+    # CA
+    user_ca = servico.autenticar("247314", "CA")
+    assert user_ca is not None
+    assert user_ca.nome == "Lucas Bussinger"
+
+    # Assembleia
+    user_ass = servico.autenticar("AC-001", "ASSEMBLEIA")
+    assert user_ass is not None
+
+    # Congresso
+    user_cong = servico.autenticar("DEP-001", "CONGRESSO")
+    assert user_cong is not None
 
 
 def test_obter_fabrica_contexto():
@@ -191,29 +226,35 @@ def test_registrar_fabrica_contexto_estende_sistema():
         def contexto(self) -> str:
             return "NOVO_CONTEXTO"
 
-        def criar_regra(self, **kwargs: Any) -> RegraCA:
+        def criar_regra(self, **kwargs) -> RegraCA:
             return RegraCA()
 
-        def criar_validador(self, **kwargs: Any) -> ValidadorElegibilidadeCA:
+        def criar_validador(self) -> ValidadorElegibilidadeCA:
             return ValidadorElegibilidadeCA()
 
-        def criar_repositorio(self, popular: bool = True, **kwargs: Any) -> RepositorioCA:
+        def criar_repositorio(self, popular: bool = True) -> RepositorioCA:
+            return RepositorioCA()
+
+        def obter_repositorio(self, banco=None) -> RepositorioCA:
             return RepositorioCA()
 
         def criar_sessao(
             self,
             id_sessao: str,
             total_aptos: int = 0,
-            **kwargs: Any,
+            **kwargs,
         ) -> SessaoVotacao:
             return SessaoVotacao(id_sessao, RegraCA(), total_aptos=total_aptos)
 
     fabrica_custom = FabricaCustomizada()
-    registrar_fabrica_contexto("NOVO_CONTEXTO", fabrica_custom)
+    try:
+        registrar_fabrica_contexto("NOVO_CONTEXTO", fabrica_custom)
 
-    obtida = obter_fabrica_contexto("novo_contexto")
-    assert obtida is fabrica_custom
-    assert obtida.contexto == "NOVO_CONTEXTO"
+        obtida = obter_fabrica_contexto("novo_contexto")
+        assert obtida is fabrica_custom
+        assert obtida.contexto == "NOVO_CONTEXTO"
+    finally:
+        remover_fabrica_contexto("NOVO_CONTEXTO")
 
 
 def test_registrar_fabrica_contexto_validacoes():

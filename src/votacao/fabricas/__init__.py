@@ -1,7 +1,7 @@
 """Padrão Abstract Factory para famílias de componentes por contexto de votação."""
 
 from votacao.fabricas.assembleia import FabricaAssembleia
-from votacao.fabricas.base import FabricaContextoVotacao
+from votacao.fabricas.base import FabricaContextoVotacao, ValidadorContexto
 from votacao.fabricas.ca import FabricaCA
 from votacao.fabricas.congresso import FabricaCongresso
 
@@ -53,11 +53,26 @@ def registrar_fabrica_contexto(contexto: str, fabrica: FabricaContextoVotacao) -
     _CATALOGO_FABRICAS[nome] = fabrica
 
 
+def remover_fabrica_contexto(contexto: str) -> bool:
+    """Remove uma fábrica registrada do catálogo (útil para testes e isolamento).
+
+    Args:
+        contexto: Nome do contexto a ser removido.
+
+    Returns:
+        True se foi removido, False caso não existisse.
+    """
+    nome = contexto.strip().upper()
+    return _CATALOGO_FABRICAS.pop(nome, None) is not None
+
+
 __all__ = [
     "FabricaAssembleia",
     "FabricaCA",
     "FabricaCongresso",
     "FabricaContextoVotacao",
+    "ValidadorContexto",
     "obter_fabrica_contexto",
     "registrar_fabrica_contexto",
+    "remover_fabrica_contexto",
 ]

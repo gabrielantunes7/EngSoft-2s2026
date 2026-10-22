@@ -23,8 +23,10 @@ from votacao.fabricas import (
     FabricaCA,
     FabricaCongresso,
     FabricaContextoVotacao,
+    ValidadorContexto,
     obter_fabrica_contexto,
     registrar_fabrica_contexto,
+    remover_fabrica_contexto,
 )
 from votacao.modelos import (
     AptidaoVoto,
@@ -101,6 +103,7 @@ __all__ = [
     "TramitacaoLegislativa",
     "TransicaoInvalidaError",
     "Usuario",
+    "ValidadorContexto",
     "ValidadorElegibilidadeAssembleia",
     "ValidadorElegibilidadeCA",
     "ValidadorElegibilidadeCongresso",
@@ -109,4 +112,5 @@ __all__ = [
     "__version__",
     "obter_fabrica_contexto",
     "registrar_fabrica_contexto",
+    "remover_fabrica_contexto",
 ]
