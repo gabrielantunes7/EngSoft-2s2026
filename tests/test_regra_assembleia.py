@@ -123,3 +123,86 @@ def test_regra_assembleia_base_zero():
     voto_simples = [Voto(eleitor_id="a1", opcao="SIM", peso=100)]
     res = regra.apurar(votos=voto_simples, total_aptos=0)
     assert res.status == StatusResultado.REJEITADO
+
+
+# Os testes abaixo fixam o comportamento atual dos critérios de maioria absoluta e
+# qualificada, inclusive os desvios que antes não eram exercitados (base zero em cada
+# critério e tipo de decisão desconhecido), para que a refatoração de
+# `_avaliar_criterio` possa ser conferida contra eles.
+
+
+@pytest.mark.regressao
+@pytest.mark.parametrize(
+    "tipo_decisao",
+    [
+        TipoDecisaoAssembleia.MAIORIA_ABSOLUTA,
+        TipoDecisaoAssembleia.QUALIFICADA_DOIS_TERCOS,
+        TipoDecisaoAssembleia.QUALIFICADA_TRES_QUINTOS,
+    ],
+)
+def test_regra_assembleia_base_zero_rejeita_sem_detalhes_do_criterio(tipo_decisao):
+    regra = RegraAssembleia(tipo_decisao=tipo_decisao, base_calculo_sobre_total_capital=True)
+    votos = [Voto(eleitor_id="a1", opcao="SIM", peso=100)]
+
+    res = regra.apurar(votos=votos, total_aptos=0)
+
+    assert res.status == StatusResultado.REJEITADO
+    assert res.percentual_vencedor == 0.0
+    assert "base_calculo" not in res.detalhes
+    assert "percentual_minimo_exigido" not in res.detalhes
+
+
+@pytest.mark.regressao
+def test_regra_assembleia_maioria_absoluta_informa_base_de_calculo():
+    regra = RegraAssembleia(
+        tipo_decisao=TipoDecisaoAssembleia.MAIORIA_ABSOLUTA,
+        base_calculo_sobre_total_capital=True,
+    )
+    votos = [
+        Voto(eleitor_id="a1", opcao="SIM", peso=5001),
+        Voto(eleitor_id="a2", opcao="NAO", peso=1000),
+    ]
+
+    res = regra.apurar(votos=votos, total_aptos=10000)
+
+    assert res.status == StatusResultado.APROVADO
+    assert res.percentual_vencedor == 50.01
+    assert res.detalhes["base_calculo"] == 10000.0
+    assert "percentual_minimo_exigido" not in res.detalhes
+
+
+@pytest.mark.regressao
+@pytest.mark.parametrize(
+    ("tipo_decisao", "peso_sim", "status", "percentual_sim", "minimo_exigido"),
+    [
+        (TipoDecisaoAssembleia.QUALIFICADA_DOIS_TERCOS, 2, StatusResultado.APROVADO, 66.67, 66.67),
+        (TipoDecisaoAssembleia.QUALIFICADA_DOIS_TERCOS, 1, StatusResultado.REJEITADO, 33.33, 66.67),
+        (TipoDecisaoAssembleia.QUALIFICADA_TRES_QUINTOS, 2, StatusResultado.REJEITADO, 40.0, 60.0),
+        (TipoDecisaoAssembleia.QUALIFICADA_TRES_QUINTOS, 3, StatusResultado.APROVADO, 60.0, 60.0),
+    ],
+)
+def test_regra_assembleia_qualificada_sobre_total_do_capital(
+    tipo_decisao, peso_sim, status, percentual_sim, minimo_exigido
+):
+    # A base é o capital total (3 ações no 2/3, 5 no 3/5), e não só o capital presente.
+    regra = RegraAssembleia(tipo_decisao=tipo_decisao, base_calculo_sobre_total_capital=True)
+    total_capital = 3 if tipo_decisao == TipoDecisaoAssembleia.QUALIFICADA_DOIS_TERCOS else 5
+    votos = [Voto(eleitor_id="a1", opcao="SIM", peso=peso_sim)]
+
+    res = regra.apurar(votos=votos, total_aptos=total_capital)
+
+    assert res.status == status
+    assert res.percentual_vencedor == percentual_sim
+    assert res.detalhes["percentual_minimo_exigido"] == minimo_exigido
+    assert "base_calculo" not in res.detalhes
+
+
+@pytest.mark.regressao
+@pytest.mark.parametrize("total_aptos", [10000, 0])
+def test_regra_assembleia_tipo_de_decisao_desconhecido(total_aptos):
+    regra = RegraAssembleia(base_calculo_sobre_total_capital=True)
+    regra.tipo_decisao = "MAIORIA_INEXISTENTE"  # type: ignore[assignment]
+    votos = [Voto(eleitor_id="a1", opcao="SIM", peso=100)]
+
+    with pytest.raises(ValueError, match="Tipo de decisão desconhecido"):
+        regra.apurar(votos=votos, total_aptos=total_aptos)
