@@ -26,6 +26,8 @@ def test_pacote_expoe_simbolos_principais():
         "HASH_GENESE",
         "LogDeAuditoria",
         "MotorApuracao",
+        "ObservadorAuditoria",
+        "ObservadorSessao",
         "PoderDeVoto",
         "ProcuracaoInvalidaError",
         "Procurador",
