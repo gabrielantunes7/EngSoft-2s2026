@@ -217,9 +217,6 @@ class ServicoElegibilidade:
         ctx = contexto.strip().upper()
         if ctx not in _CATALOGO_FABRICAS:
             validos = ", ".join(sorted(_CATALOGO_FABRICAS.keys()))
-            msg = (
-                f"Contexto de votação desconhecido: '{contexto}'. "
-                f"Valores suportados: {validos}."
-            )
+            msg = f"Contexto de votação desconhecido: '{contexto}'. Valores suportados: {validos}."
             raise ValueError(msg)
         return ctx
