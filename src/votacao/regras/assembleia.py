@@ -26,6 +26,11 @@ class RegraAssembleia(RegraDeVotacao):
 
     OPCOES_ABSTENCAO: ClassVar[set[str]] = {"ABSTENCAO", "BRANCO", "NULO"}
 
+    FRACAO_MINIMA_QUALIFICADA: ClassVar[dict[TipoDecisaoAssembleia, float]] = {
+        TipoDecisaoAssembleia.QUALIFICADA_DOIS_TERCOS: 2.0 / 3.0,
+        TipoDecisaoAssembleia.QUALIFICADA_TRES_QUINTOS: 3.0 / 5.0,
+    }
+
     def __init__(
         self,
         tipo_decisao: TipoDecisaoAssembleia = TipoDecisaoAssembleia.MAIORIA_SIMPLES,
@@ -147,35 +152,24 @@ class RegraAssembleia(RegraDeVotacao):
             aprovado = votos_sim > votos_nao
             return aprovado, percentual_sim, detalhes
 
+        absoluta = self.tipo_decisao == TipoDecisaoAssembleia.MAIORIA_ABSOLUTA
+        fracao_exigida = self.FRACAO_MINIMA_QUALIFICADA.get(self.tipo_decisao)
+        if not absoluta and fracao_exigida is None:
+            msg = f"Tipo de decisão desconhecido: {self.tipo_decisao}"
+            raise ValueError(msg)
+
         base = (
             total_capital_votante if self.base_calculo_sobre_total_capital else total_peso_presente
         )
+        if base <= 0:
+            return False, 0.0, detalhes
+        percentual_sim = round((votos_sim / base) * 100, 2)
 
-        if self.tipo_decisao == TipoDecisaoAssembleia.MAIORIA_ABSOLUTA:
-            if base <= 0:
-                return False, 0.0, detalhes
-            percentual_sim = round((votos_sim / base) * 100, 2)
+        if absoluta:
             aprovado = votos_sim > (base / 2)
             detalhes["base_calculo"] = float(base)
             return aprovado, percentual_sim, detalhes
 
-        if self.tipo_decisao == TipoDecisaoAssembleia.QUALIFICADA_DOIS_TERCOS:
-            if base <= 0:
-                return False, 0.0, detalhes
-            percentual_sim = round((votos_sim / base) * 100, 2)
-            fracao_exigida = 2.0 / 3.0
-            aprovado = (votos_sim / base) >= fracao_exigida
-            detalhes["percentual_minimo_exigido"] = round(fracao_exigida * 100, 2)
-            return aprovado, percentual_sim, detalhes
-
-        if self.tipo_decisao == TipoDecisaoAssembleia.QUALIFICADA_TRES_QUINTOS:
-            if base <= 0:
-                return False, 0.0, detalhes
-            percentual_sim = round((votos_sim / base) * 100, 2)
-            fracao_exigida = 3.0 / 5.0
-            aprovado = (votos_sim / base) >= fracao_exigida
-            detalhes["percentual_minimo_exigido"] = round(fracao_exigida * 100, 2)
-            return aprovado, percentual_sim, detalhes
-
-        msg = f"Tipo de decisão desconhecido: {self.tipo_decisao}"
-        raise ValueError(msg)
+        aprovado = (votos_sim / base) >= fracao_exigida
+        detalhes["percentual_minimo_exigido"] = round(fracao_exigida * 100, 2)
+        return aprovado, percentual_sim, detalhes
