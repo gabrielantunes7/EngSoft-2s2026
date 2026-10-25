@@ -1,5 +1,6 @@
 """Módulo de validação de elegibilidade e regras de aptidão ao voto."""
 
+from votacao.elegibilidade.base import ValidadorContexto
 from votacao.elegibilidade.validador_assembleia import (
     ValidadorElegibilidadeAssembleia,
 )
@@ -9,6 +10,7 @@ from votacao.elegibilidade.validador_congresso import (
 )
 
 __all__ = [
+    "ValidadorContexto",
     "ValidadorElegibilidadeAssembleia",
     "ValidadorElegibilidadeCA",
     "ValidadorElegibilidadeCongresso",
