@@ -66,12 +66,18 @@ def remover_fabrica_contexto(contexto: str) -> bool:
     return _CATALOGO_FABRICAS.pop(nome, None) is not None
 
 
+def contextos_catalogados() -> set[str]:
+    """Retorna o conjunto de contextos eleitorais registrados no catálogo."""
+    return set(_CATALOGO_FABRICAS.keys())
+
+
 __all__ = [
     "FabricaAssembleia",
     "FabricaCA",
     "FabricaCongresso",
     "FabricaContextoVotacao",
     "ValidadorContexto",
+    "contextos_catalogados",
     "obter_fabrica_contexto",
     "registrar_fabrica_contexto",
     "remover_fabrica_contexto",

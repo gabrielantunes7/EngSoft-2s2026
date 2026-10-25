@@ -233,10 +233,15 @@ def test_registrar_fabrica_contexto_estende_sistema():
             return ValidadorElegibilidadeCA()
 
         def criar_repositorio(self, popular: bool = True) -> RepositorioCA:
-            return RepositorioCA()
+            repo = RepositorioCA()
+            if popular:
+                repo.popular_com_seeds()
+            return repo
 
         def obter_repositorio(self, banco=None) -> RepositorioCA:
-            return RepositorioCA()
+            if banco is not None and hasattr(banco, "ca"):
+                return banco.ca
+            return self.criar_repositorio(popular=True)
 
         def criar_sessao(
             self,
@@ -253,8 +258,20 @@ def test_registrar_fabrica_contexto_estende_sistema():
         obtida = obter_fabrica_contexto("novo_contexto")
         assert obtida is fabrica_custom
         assert obtida.contexto == "NOVO_CONTEXTO"
+
+        # ServicoElegibilidade aceita contextos registrados dinamicamente
+        servico = ServicoElegibilidade()
+        assert "NOVO_CONTEXTO" in servico.contextos_validos
+        assert "NOVO_CONTEXTO" in servico.CONTEXTOS_VALIDOS
+        user = servico.autenticar("247314", "NOVO_CONTEXTO")
+        assert user is not None
+        assert user.id == "247314"
     finally:
         remover_fabrica_contexto("NOVO_CONTEXTO")
+
+    assert "NOVO_CONTEXTO" not in servico.contextos_validos
+    with pytest.raises(ValueError, match="Contexto de votação desconhecido"):
+        servico.autenticar("247314", "NOVO_CONTEXTO")
 
 
 def test_registrar_fabrica_contexto_validacoes():

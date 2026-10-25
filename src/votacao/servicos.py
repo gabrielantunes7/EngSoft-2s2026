@@ -1,17 +1,13 @@
 """Serviço interno de autenticação, consulta de aptidão ao voto e elegibilidade."""
 
 from datetime import UTC, datetime
-from typing import ClassVar
 
 from votacao.dados.seeds import BancoDadosMock
-from votacao.elegibilidade.validador_assembleia import (
-    ValidadorElegibilidadeAssembleia,
+from votacao.fabricas import (
+    _CATALOGO_FABRICAS,
+    contextos_catalogados,
+    obter_fabrica_contexto,
 )
-from votacao.elegibilidade.validador_ca import ValidadorElegibilidadeCA
-from votacao.elegibilidade.validador_congresso import (
-    ValidadorElegibilidadeCongresso,
-)
-from votacao.fabricas import obter_fabrica_contexto
 from votacao.modelos import (
     AptidaoVoto,
     CasaLegislativa,
@@ -29,16 +25,19 @@ class ServicoElegibilidade:
     elegibilidade de cada domínio (CA, Assembleia de Acionistas e Congresso Nacional).
     """
 
-    CONTEXTOS_VALIDOS: ClassVar[set[str]] = {"CA", "ASSEMBLEIA", "CONGRESSO"}
-    OPCOES_PADRAO_ASSEMBLEIA: ClassVar[set[str]] = {"SIM", "NAO", "ABSTENCAO", "BRANCO", "NULO"}
-    OPCOES_PADRAO_CONGRESSO: ClassVar[set[str]] = {"SIM", "NAO", "ABSTENCAO", "BRANCO"}
-
     def __init__(self, banco: BancoDadosMock | None = None) -> None:
         self.banco = banco if banco is not None else BancoDadosMock()
-        self.validador_ca = ValidadorElegibilidadeCA()
-        self.validador_assembleia = ValidadorElegibilidadeAssembleia()
-        self.validador_congresso = ValidadorElegibilidadeCongresso()
         self.procuracoes = ServicoProcuracao(self.banco.assembleia)
+
+    @property
+    def contextos_validos(self) -> set[str]:
+        """Contextos eleitorais atualmente catalogados nas fábricas."""
+        return contextos_catalogados()
+
+    @property
+    def CONTEXTOS_VALIDOS(self) -> set[str]:  # noqa: N802
+        """Compatibilidade retroativa: contextos registrados no catálogo."""
+        return self.contextos_validos
 
     def autenticar(self, identificador: str, contexto: str) -> Usuario | None:
         """Autentica o usuário na base correspondente ao contexto do processo de escolha.
@@ -216,10 +215,11 @@ class ServicoElegibilidade:
 
     def _normalizar_contexto(self, contexto: str) -> str:
         ctx = contexto.strip().upper()
-        if ctx not in self.CONTEXTOS_VALIDOS:
+        if ctx not in _CATALOGO_FABRICAS:
+            validos = ", ".join(sorted(_CATALOGO_FABRICAS.keys()))
             msg = (
                 f"Contexto de votação desconhecido: '{contexto}'. "
-                f"Valores suportados: {', '.join(sorted(self.CONTEXTOS_VALIDOS))}."
+                f"Valores suportados: {validos}."
             )
             raise ValueError(msg)
         return ctx
