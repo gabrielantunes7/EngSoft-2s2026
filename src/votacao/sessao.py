@@ -1,6 +1,6 @@
 """Ciclo de vida de uma sessão de votação."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -8,6 +8,7 @@ from typing import Any
 from votacao.auditoria import LogDeAuditoria, TipoEvento
 from votacao.modelos import ResultadoApuracao, Voto
 from votacao.motor import MotorApuracao
+from votacao.observadores import ObservadorAuditoria, ObservadorSessao
 from votacao.regras.base import RegraDeVotacao
 
 # Separador que o ServicoElegibilidade usa para marcar voto por procuração:
@@ -38,22 +39,21 @@ class VotoRecusadoError(Exception):
 
 
 class SessaoVotacao:
-    """Sessão de votação controlada por uma máquina de estados.
+    """Sessão de votação controlada por uma máquina de estados e padrão Observer.
 
     A sessão percorre CRIADA → ABERTA → EM_VOTACAO → EM_APURACAO → ENCERRADA, sempre
     nessa ordem e sem retorno. Votos só são aceitos em EM_VOTACAO, dentro da janela
     de votação quando ela é definida, e no máximo um por eleitor. A apuração só
     acontece depois que a urna foi fechada.
 
-    Quando a sessão recebe um `LogDeAuditoria`, cada transição e cada voto aceito
-    geram um registro na cadeia, e o eleitor recebe o hash do seu registro como
-    comprovante.
+    A sessão atua como publicador (Subject) no padrão Observer: sempre que transita de
+    estado ou admite um voto, notifica os observadores registrados (como o
+    `ObservadorAuditoria`), permitindo desacoplar a auditoria, notificações e métricas.
 
     Attributes:
         id_sessao: Identificador da sessão.
         regra: Estratégia de quórum e apuração aplicada aos votos.
         total_aptos: Total de eleitores aptos ou de capital social votante.
-        log: Log de auditoria da sessão, ou None para uma sessão sem auditoria.
     """
 
     def __init__(
@@ -62,6 +62,7 @@ class SessaoVotacao:
         regra: RegraDeVotacao,
         total_aptos: int = 0,
         log: LogDeAuditoria | None = None,
+        observadores: Sequence[ObservadorSessao] | None = None,
         relogio: Callable[[], datetime] | None = None,
     ) -> None:
         """Cria a sessão no estado CRIADA.
@@ -70,8 +71,9 @@ class SessaoVotacao:
             id_sessao: Identificador da sessão.
             regra: Estratégia de votação que implementa RegraDeVotacao.
             total_aptos: Total de aptos (CA/Congresso) ou capital social (Assembleia).
-            log: Log de auditoria no qual o ciclo da sessão é registrado. Precisa ter
-                sido criado para esta mesma votação.
+            log: Log de auditoria opcional. Quando informado, registra automaticamente um
+                ObservadorAuditoria para manter a retrocompatibilidade.
+            observadores: Lista opcional de observadores que acompanharão a sessão.
             relogio: Função que devolve o instante corrente, usada para aplicar a
                 janela de votação. O padrão é a hora corrente em UTC; injetar outra
                 torna a trava temporal determinística nos testes.
@@ -100,7 +102,16 @@ class SessaoVotacao:
         self.id_sessao = id_sessao
         self.regra = regra
         self.total_aptos = total_aptos
-        self.log = log
+        self._observadores: list[ObservadorSessao] = []
+        self._log = log
+
+        if log is not None:
+            self.adicionar_observador(ObservadorAuditoria(log))
+
+        if observadores is not None:
+            for obs in observadores:
+                self.adicionar_observador(obs)
+
         self._relogio = relogio if relogio is not None else lambda: datetime.now(UTC)
         self._estado = EstadoSessao.CRIADA
         self._inicio_votacao: datetime | None = None
@@ -108,6 +119,49 @@ class SessaoVotacao:
         self._eleitores: set[str] = set()
         self._votos: list[Voto] = []
         self._resultado: ResultadoApuracao | None = None
+
+    @property
+    def log(self) -> LogDeAuditoria | None:
+        """Log de auditoria configurado na sessão, se houver."""
+        return self._log
+
+    @property
+    def observadores(self) -> tuple[ObservadorSessao, ...]:
+        """Observadores atualmente registrados na sessão."""
+        return tuple(self._observadores)
+
+    def adicionar_observador(self, observador: ObservadorSessao) -> None:
+        """Registra um observador para acompanhar eventos e votos da sessão.
+
+        Args:
+            observador: Instância de ObservadorSessao.
+
+        Raises:
+            TypeError: Se o objeto não implementar ObservadorSessao.
+        """
+        if not isinstance(observador, ObservadorSessao):
+            msg = "O observador deve implementar a interface ObservadorSessao."
+            raise TypeError(msg)
+
+        if observador not in self._observadores:
+            self._observadores.append(observador)
+
+    def remover_observador(self, observador: ObservadorSessao) -> bool:
+        """Remove um observador registrado da sessão.
+
+        Returns:
+            True se o observador foi removido, False caso não estivesse presente.
+        """
+        if observador in self._observadores:
+            self._observadores.remove(observador)
+            if (
+                self._log is not None
+                and isinstance(observador, ObservadorAuditoria)
+                and observador.log is self._log
+            ):
+                self._log = None
+            return True
+        return False
 
     @property
     def estado(self) -> EstadoSessao:
@@ -153,16 +207,18 @@ class SessaoVotacao:
             ValueError: Se o início for posterior ao fim.
             TransicaoInvalidaError: Se a sessão não estiver em ABERTA.
         """
+        self._exigir_estado(EstadoSessao.ABERTA, operacao="passar a EM_VOTACAO")
         if inicio is not None and fim is not None and inicio > fim:
             msg = "O início da janela de votação não pode ser posterior ao fim."
             raise ValueError(msg)
 
-        self._transitar(de=EstadoSessao.ABERTA, para=EstadoSessao.EM_VOTACAO)
         self._inicio_votacao = inicio
         self._fim_votacao = fim
-        self._auditar(
-            TipoEvento.VOTACAO_ABERTA,
-            {
+        self._transitar(
+            de=EstadoSessao.ABERTA,
+            para=EstadoSessao.EM_VOTACAO,
+            evento=TipoEvento.VOTACAO_ABERTA,
+            dados={
                 "inicio": inicio.isoformat() if inicio is not None else None,
                 "fim": fim.isoformat() if fim is not None else None,
                 "total_aptos": self.total_aptos,
@@ -171,8 +227,12 @@ class SessaoVotacao:
 
     def encerrar_votacao(self) -> None:
         """Fecha a urna (EM_VOTACAO → EM_APURACAO)."""
-        self._transitar(de=EstadoSessao.EM_VOTACAO, para=EstadoSessao.EM_APURACAO)
-        self._auditar(TipoEvento.VOTACAO_ENCERRADA, {"total_votos": len(self._votos)})
+        self._transitar(
+            de=EstadoSessao.EM_VOTACAO,
+            para=EstadoSessao.EM_APURACAO,
+            evento=TipoEvento.VOTACAO_ENCERRADA,
+            dados={"total_votos": len(self._votos)},
+        )
 
     def registrar_voto(self, voto: Voto) -> str | None:
         """Aceita um voto, somente com a urna aberta, dentro da janela e uma vez por eleitor.
@@ -181,8 +241,8 @@ class SessaoVotacao:
             voto: Voto já autorizado pelo serviço de elegibilidade.
 
         Returns:
-            O protocolo do registro de auditoria, que serve de comprovante ao eleitor,
-            ou None se a sessão não tem log.
+            O protocolo do registro de auditoria gerado pelo observador de auditoria,
+            ou None se a sessão não possui observador de auditoria.
 
         Raises:
             TransicaoInvalidaError: Se a sessão não estiver em EM_VOTACAO.
@@ -202,9 +262,13 @@ class SessaoVotacao:
         self._eleitores.update(identidades)
         self._votos.append(voto)
 
-        if self.log is None:
-            return None
-        return self.log.registrar_voto(voto).hash
+        protocolo: str | None = None
+        for obs in self._observadores:
+            comprovante = obs.ao_registrar_voto(self, voto)
+            if comprovante is not None and protocolo is None:
+                protocolo = comprovante
+
+        return protocolo
 
     def apurar(self) -> ResultadoApuracao:
         """Apura os votos com a regra da sessão (EM_APURACAO → ENCERRADA).
@@ -222,10 +286,11 @@ class SessaoVotacao:
             total_aptos_ou_capital=self.total_aptos,
         )
         self._resultado = resultado
-        self._estado = EstadoSessao.ENCERRADA
-        self._auditar(
-            TipoEvento.RESULTADO_PROCLAMADO,
-            {
+        self._transitar(
+            de=EstadoSessao.EM_APURACAO,
+            para=EstadoSessao.ENCERRADA,
+            evento=TipoEvento.RESULTADO_PROCLAMADO,
+            dados={
                 "status": resultado.status.value,
                 "vencedor_ou_decisao": resultado.vencedor_ou_decisao,
                 "quorum_atingido": resultado.quorum_atingido,
@@ -236,9 +301,23 @@ class SessaoVotacao:
         )
         return resultado
 
-    def _transitar(self, de: EstadoSessao, para: EstadoSessao) -> None:
+    def _transitar(
+        self,
+        de: EstadoSessao,
+        para: EstadoSessao,
+        evento: TipoEvento | None = None,
+        dados: dict[str, Any] | None = None,
+    ) -> None:
         self._exigir_estado(de, operacao=f"passar a {para.value}")
         self._estado = para
+        for obs in self._observadores:
+            obs.ao_mudar_estado(
+                sessao=self,
+                estado_anterior=de,
+                novo_estado=para,
+                evento=evento,
+                dados=dados or {},
+            )
 
     def _exigir_estado(self, esperado: EstadoSessao, operacao: str) -> None:
         if self._estado != esperado:
@@ -265,10 +344,6 @@ class SessaoVotacao:
                 f"{self._fim_votacao.isoformat()}."
             )
             raise VotoRecusadoError(msg)
-
-    def _auditar(self, evento: TipoEvento, dados: dict[str, Any]) -> None:
-        if self.log is not None:
-            self.log.registrar(evento, dados)
 
     @staticmethod
     def _identidades(voto: Voto) -> set[str]:

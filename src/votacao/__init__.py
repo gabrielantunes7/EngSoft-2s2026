@@ -5,6 +5,7 @@ from votacao.auditoria import (
     LogDeAuditoria,
     RegistroAuditoria,
     ResultadoVerificacao,
+    ResumoEncerramento,
     TipoEvento,
 )
 from votacao.dados.assembleia import Procurador
@@ -16,6 +17,16 @@ from votacao.elegibilidade.validador_assembleia import (
 from votacao.elegibilidade.validador_ca import ValidadorElegibilidadeCA
 from votacao.elegibilidade.validador_congresso import (
     ValidadorElegibilidadeCongresso,
+)
+from votacao.fabricas import (
+    FabricaAssembleia,
+    FabricaCA,
+    FabricaCongresso,
+    FabricaContextoVotacao,
+    ValidadorContexto,
+    obter_fabrica_contexto,
+    registrar_fabrica_contexto,
+    remover_fabrica_contexto,
 )
 from votacao.modelos import (
     AptidaoVoto,
@@ -29,6 +40,10 @@ from votacao.modelos import (
     Voto,
 )
 from votacao.motor import MotorApuracao
+from votacao.observadores import (
+    ObservadorAuditoria,
+    ObservadorSessao,
+)
 from votacao.procuracoes import (
     PoderDeVoto,
     ProcuracaoInvalidaError,
@@ -62,8 +77,14 @@ __all__ = [
     "CasaLegislativa",
     "ElegibilidadeCandidato",
     "EstadoSessao",
+    "FabricaAssembleia",
+    "FabricaCA",
+    "FabricaCongresso",
+    "FabricaContextoVotacao",
     "LogDeAuditoria",
     "MotorApuracao",
+    "ObservadorAuditoria",
+    "ObservadorSessao",
     "PoderDeVoto",
     "ProcuracaoInvalidaError",
     "Procurador",
@@ -75,6 +96,7 @@ __all__ = [
     "RegraDeVotacao",
     "ResultadoApuracao",
     "ResultadoVerificacao",
+    "ResumoEncerramento",
     "ServicoElegibilidade",
     "ServicoProcuracao",
     "SessaoVotacao",
@@ -87,10 +109,14 @@ __all__ = [
     "TramitacaoLegislativa",
     "TransicaoInvalidaError",
     "Usuario",
+    "ValidadorContexto",
     "ValidadorElegibilidadeAssembleia",
     "ValidadorElegibilidadeCA",
     "ValidadorElegibilidadeCongresso",
     "Voto",
     "VotoRecusadoError",
     "__version__",
+    "obter_fabrica_contexto",
+    "registrar_fabrica_contexto",
+    "remover_fabrica_contexto",
 ]

@@ -1,11 +1,53 @@
 """Validador de elegibilidade para eleições do Centro Acadêmico (CA)."""
 
+from datetime import datetime
+from typing import Any
+
 from votacao.dados.ca import RepositorioCA
-from votacao.modelos import AptidaoVoto, ElegibilidadeCandidato
+from votacao.elegibilidade.base import ValidadorContexto
+from votacao.modelos import AptidaoVoto, CasaLegislativa, ElegibilidadeCandidato, Usuario
 
 
-class ValidadorElegibilidadeCA:
+class ValidadorElegibilidadeCA(ValidadorContexto):
     """Valida regras de aptidão de voto para discentes e elegibilidade de chapas."""
+
+    def autenticar(self, identificador: str, repo: Any) -> Usuario | None:
+        """Autentica o discente no cadastro acadêmico do CA."""
+        discente = repo.obter_discente(identificador.strip())
+        if discente is None:
+            return None
+        ativo = discente.matricula_ativa and not discente.suspenso
+        return Usuario(
+            id=discente.ra,
+            nome=discente.nome,
+            email=f"{discente.ra}@dac.unicamp.br",
+            ativo=ativo,
+        )
+
+    def consultar_aptidao(
+        self,
+        eleitor_id: str,
+        repo: Any,
+        *,
+        casa: CasaLegislativa | None = None,
+        procurador_id: str | None = None,
+        momento: datetime | None = None,
+    ) -> AptidaoVoto:
+        """Consulta centralizada de aptidão do discente ao voto."""
+        return self.validar_eleitor(eleitor_id, repo)
+
+    def validar_opcao(
+        self,
+        opcao_ou_candidato: str,
+        repo: Any,
+        *,
+        casa: CasaLegislativa | None = None,
+    ) -> ElegibilidadeCandidato:
+        """Valida a opção de voto (chapa ou voto neutro branco/nulo)."""
+        opcao_norm = opcao_ou_candidato.strip().upper()
+        if opcao_norm in {"BRANCO", "NULO"}:
+            return ElegibilidadeCandidato(elegivel=True, detalhes={"tipo": "voto_neutro"})
+        return self.validar_candidato_chapa(opcao_ou_candidato, repo)
 
     @staticmethod
     def validar_eleitor(ra: str, repo: RepositorioCA) -> AptidaoVoto:

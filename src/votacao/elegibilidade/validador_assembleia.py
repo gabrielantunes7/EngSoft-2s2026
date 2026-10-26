@@ -1,13 +1,63 @@
 """Validador de elegibilidade para deliberações em Assembleia de Acionistas."""
 
 from datetime import datetime
+from typing import Any, ClassVar
 
 from votacao.dados.assembleia import RepositorioAssembleia
-from votacao.modelos import AptidaoVoto, ElegibilidadeCandidato
+from votacao.elegibilidade.base import ValidadorContexto
+from votacao.modelos import AptidaoVoto, CasaLegislativa, ElegibilidadeCandidato, Usuario
 
 
-class ValidadorElegibilidadeAssembleia:
+class ValidadorElegibilidadeAssembleia(ValidadorContexto):
     """Valida aptidão de acionistas e procuradores, e elegibilidade ao conselho."""
+
+    OPCOES_PADRAO: ClassVar[set[str]] = {"SIM", "NAO", "ABSTENCAO", "BRANCO", "NULO"}
+
+    def autenticar(self, identificador: str, repo: Any) -> Usuario | None:
+        """Autentica o acionista no livro societário."""
+        acionista = repo.obter_acionista(identificador.strip())
+        if acionista is None:
+            return None
+        ativo = acionista.ativo and not acionista.bloqueado
+        return Usuario(
+            id=acionista.id,
+            nome=acionista.nome,
+            email=f"{acionista.id.lower()}@investidores.com.br",
+            ativo=ativo,
+        )
+
+    def consultar_aptidao(
+        self,
+        eleitor_id: str,
+        repo: Any,
+        *,
+        casa: CasaLegislativa | None = None,
+        procurador_id: str | None = None,
+        momento: datetime | None = None,
+    ) -> AptidaoVoto:
+        """Consulta centralizada de aptidão do acionista/procurador ao voto."""
+        return self.validar_eleitor(
+            acionista_id=eleitor_id,
+            repo=repo,
+            procurador_id=procurador_id,
+            momento=momento,
+        )
+
+    def validar_opcao(
+        self,
+        opcao_ou_candidato: str,
+        repo: Any,
+        *,
+        casa: CasaLegislativa | None = None,
+    ) -> ElegibilidadeCandidato:
+        """Valida se a opção é deliberação padrão ou candidato ao conselho."""
+        opcao_norm = opcao_ou_candidato.strip().upper()
+        if opcao_norm in self.OPCOES_PADRAO:
+            return ElegibilidadeCandidato(elegivel=True, detalhes={"tipo": "deliberacao"})
+        return self.validar_candidato_conselho(
+            candidato_id=opcao_ou_candidato,
+            repo=repo,
+        )
 
     @staticmethod
     def validar_eleitor(

@@ -1,15 +1,12 @@
 """Serviço interno de autenticação, consulta de aptidão ao voto e elegibilidade."""
 
 from datetime import UTC, datetime
-from typing import ClassVar
 
 from votacao.dados.seeds import BancoDadosMock
-from votacao.elegibilidade.validador_assembleia import (
-    ValidadorElegibilidadeAssembleia,
-)
-from votacao.elegibilidade.validador_ca import ValidadorElegibilidadeCA
-from votacao.elegibilidade.validador_congresso import (
-    ValidadorElegibilidadeCongresso,
+from votacao.fabricas import (
+    _CATALOGO_FABRICAS,
+    contextos_catalogados,
+    obter_fabrica_contexto,
 )
 from votacao.modelos import (
     AptidaoVoto,
@@ -28,16 +25,19 @@ class ServicoElegibilidade:
     elegibilidade de cada domínio (CA, Assembleia de Acionistas e Congresso Nacional).
     """
 
-    CONTEXTOS_VALIDOS: ClassVar[set[str]] = {"CA", "ASSEMBLEIA", "CONGRESSO"}
-    OPCOES_PADRAO_ASSEMBLEIA: ClassVar[set[str]] = {"SIM", "NAO", "ABSTENCAO", "BRANCO", "NULO"}
-    OPCOES_PADRAO_CONGRESSO: ClassVar[set[str]] = {"SIM", "NAO", "ABSTENCAO", "BRANCO"}
-
     def __init__(self, banco: BancoDadosMock | None = None) -> None:
         self.banco = banco if banco is not None else BancoDadosMock()
-        self.validador_ca = ValidadorElegibilidadeCA()
-        self.validador_assembleia = ValidadorElegibilidadeAssembleia()
-        self.validador_congresso = ValidadorElegibilidadeCongresso()
         self.procuracoes = ServicoProcuracao(self.banco.assembleia)
+
+    @property
+    def contextos_validos(self) -> set[str]:
+        """Contextos eleitorais atualmente catalogados nas fábricas."""
+        return contextos_catalogados()
+
+    @property
+    def CONTEXTOS_VALIDOS(self) -> set[str]:  # noqa: N802
+        """Compatibilidade retroativa: contextos registrados no catálogo."""
+        return self.contextos_validos
 
     def autenticar(self, identificador: str, contexto: str) -> Usuario | None:
         """Autentica o usuário na base correspondente ao contexto do processo de escolha.
@@ -50,44 +50,10 @@ class ServicoElegibilidade:
             Instância de Usuario caso o registro exista e esteja habilitado; None caso contrário.
         """
         ctx = self._normalizar_contexto(contexto)
-        identificador_limpo = identificador.strip()
-
-        if ctx == "CA":
-            discente = self.banco.ca.obter_discente(identificador_limpo)
-            if discente is None:
-                return None
-            ativo = discente.matricula_ativa and not discente.suspenso
-            return Usuario(
-                id=discente.ra,
-                nome=discente.nome,
-                email=f"{discente.ra}@dac.unicamp.br",
-                ativo=ativo,
-            )
-
-        if ctx == "ASSEMBLEIA":
-            acionista = self.banco.assembleia.obter_acionista(identificador_limpo)
-            if acionista is None:
-                return None
-            ativo = acionista.ativo and not acionista.bloqueado
-            return Usuario(
-                id=acionista.id,
-                nome=acionista.nome,
-                email=f"{acionista.id.lower()}@investidores.com.br",
-                ativo=ativo,
-            )
-
-        # Contexto CONGRESSO
-        parlamentar = self.banco.congresso.obter_parlamentar(identificador_limpo)
-        if parlamentar is None:
-            return None
-        ativo = parlamentar.em_exercicio and not parlamentar.licenciado and not parlamentar.suspenso
-        casa_sigla = "camara" if parlamentar.casa == CasaLegislativa.CAMARA else "senado"
-        return Usuario(
-            id=parlamentar.id,
-            nome=parlamentar.nome,
-            email=f"{parlamentar.id.lower()}@{casa_sigla}.leg.br",
-            ativo=ativo,
-        )
+        fabrica = obter_fabrica_contexto(ctx)
+        repo = fabrica.obter_repositorio(self.banco)
+        validador = fabrica.criar_validador()
+        return validador.autenticar(identificador, repo)
 
     def consultar_aptidao(
         self,
@@ -97,28 +63,17 @@ class ServicoElegibilidade:
         procurador_id: str | None = None,
         momento: datetime | None = None,
     ) -> AptidaoVoto:
-        """Consulta centralizada da aptidão ao voto para qualquer um dos três contextos."""
+        """Consulta centralizada da aptidão ao voto para qualquer um dos contextos."""
         ctx = self._normalizar_contexto(contexto)
-
-        if ctx == "CA":
-            return self.validador_ca.validar_eleitor(eleitor_id, self.banco.ca)
-
-        if ctx == "ASSEMBLEIA":
-            return self.validador_assembleia.validar_eleitor(
-                acionista_id=eleitor_id,
-                repo=self.banco.assembleia,
-                procurador_id=procurador_id,
-                momento=momento,
-            )
-
-        # Contexto CONGRESSO
-        if casa is None:
-            msg = "Para consulta no contexto CONGRESSO, a CasaLegislativa deve ser informada."
-            raise ValueError(msg)
-        return self.validador_congresso.validar_eleitor(
-            parlamentar_id=eleitor_id,
-            casa_votacao=casa,
-            repo=self.banco.congresso,
+        fabrica = obter_fabrica_contexto(ctx)
+        repo = fabrica.obter_repositorio(self.banco)
+        validador = fabrica.criar_validador()
+        return validador.consultar_aptidao(
+            eleitor_id,
+            repo,
+            casa=casa,
+            procurador_id=procurador_id,
+            momento=momento,
         )
 
     def validar_candidato_ou_opcao(
@@ -129,33 +84,13 @@ class ServicoElegibilidade:
     ) -> ElegibilidadeCandidato:
         """Valida se a opção ou candidatura é elegível e admissível para votação."""
         ctx = self._normalizar_contexto(contexto)
-        opcao_norm = opcao_ou_candidato.strip().upper()
-
-        if ctx == "CA":
-            if opcao_norm in {"BRANCO", "NULO"}:
-                return ElegibilidadeCandidato(elegivel=True, detalhes={"tipo": "voto_neutro"})
-            return self.validador_ca.validar_candidato_chapa(opcao_ou_candidato, self.banco.ca)
-
-        if ctx == "ASSEMBLEIA":
-            if opcao_norm in self.OPCOES_PADRAO_ASSEMBLEIA:
-                return ElegibilidadeCandidato(elegivel=True, detalhes={"tipo": "deliberacao"})
-            return self.validador_assembleia.validar_candidato_conselho(
-                candidato_id=opcao_ou_candidato,
-                repo=self.banco.assembleia,
-            )
-
-        # Contexto CONGRESSO
-        if casa is None:
-            msg = "Para validação no contexto CONGRESSO, a CasaLegislativa deve ser informada."
-            raise ValueError(msg)
-
-        if opcao_norm in self.OPCOES_PADRAO_CONGRESSO:
-            return ElegibilidadeCandidato(elegivel=True, detalhes={"tipo": "voto_parlamentar"})
-
-        return self.validador_congresso.validar_materia(
-            materia_id=opcao_ou_candidato,
-            casa_votacao=casa,
-            repo=self.banco.congresso,
+        fabrica = obter_fabrica_contexto(ctx)
+        repo = fabrica.obter_repositorio(self.banco)
+        validador = fabrica.criar_validador()
+        return validador.validar_opcao(
+            opcao_ou_candidato,
+            repo,
+            casa=casa,
         )
 
     def autorizar_voto(
@@ -280,10 +215,8 @@ class ServicoElegibilidade:
 
     def _normalizar_contexto(self, contexto: str) -> str:
         ctx = contexto.strip().upper()
-        if ctx not in self.CONTEXTOS_VALIDOS:
-            msg = (
-                f"Contexto de votação desconhecido: '{contexto}'. "
-                f"Valores suportados: {', '.join(sorted(self.CONTEXTOS_VALIDOS))}."
-            )
+        if ctx not in _CATALOGO_FABRICAS:
+            validos = ", ".join(sorted(_CATALOGO_FABRICAS.keys()))
+            msg = f"Contexto de votação desconhecido: '{contexto}'. Valores suportados: {validos}."
             raise ValueError(msg)
         return ctx
