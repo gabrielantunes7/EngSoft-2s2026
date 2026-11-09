@@ -2,6 +2,7 @@
 
 import pytest
 
+from votacao.auditoria import LogDeAuditoria, TipoEvento
 from votacao.dados.assembleia import RepositorioAssembleia
 from votacao.dados.ca import RepositorioCA
 from votacao.dados.congresso import RepositorioCongresso
@@ -29,6 +30,7 @@ from votacao.modelos import (
     TipoMateriaCongresso,
     Voto,
 )
+from votacao.observadores import ObservadorAuditoria
 from votacao.regras.assembleia import RegraAssembleia
 from votacao.regras.ca import RegraCA
 from votacao.regras.congresso import RegraCongresso
@@ -280,3 +282,71 @@ def test_registrar_fabrica_contexto_validacoes():
 
     with pytest.raises(TypeError, match="FabricaContextoVotacao"):
         registrar_fabrica_contexto("TESTE", object())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("banco_incompleto", [None, object()])
+def test_fabricas_obter_repositorio_fallback_sem_banco(banco_incompleto: object | None):
+    repo_ca = FabricaCA().obter_repositorio(banco_incompleto)
+    assert isinstance(repo_ca, RepositorioCA)
+    assert len(repo_ca.listar_discentes()) > 0
+
+    repo_ass = FabricaAssembleia().obter_repositorio(banco_incompleto)
+    assert isinstance(repo_ass, RepositorioAssembleia)
+    assert len(repo_ass.listar_acionistas()) > 0
+
+    repo_cong = FabricaCongresso().obter_repositorio(banco_incompleto)
+    assert isinstance(repo_cong, RepositorioCongresso)
+    assert len(repo_cong.listar_parlamentares()) > 0
+
+
+def test_fabricas_criar_sessao_com_observadores_customizados():
+    log_ca = LogDeAuditoria("CA-OBS")
+    obs_ca = ObservadorAuditoria(log_ca)
+    sessao_ca = FabricaCA().criar_sessao(
+        "CA-OBS",
+        total_aptos=10,
+        quorum_minimo_votantes=1,
+        observadores=[obs_ca],
+    )
+    assert sessao_ca.observadores == (obs_ca,)
+    sessao_ca.abrir()
+    sessao_ca.liberar_votacao()
+    sessao_ca.registrar_voto(Voto(eleitor_id="aluno-1", opcao="Chapa 1"))
+    assert [r.evento for r in log_ca.registros] == [
+        TipoEvento.VOTACAO_ABERTA,
+        TipoEvento.VOTO_REGISTRADO,
+    ]
+
+    log_ass = LogDeAuditoria("AGO-OBS")
+    obs_ass = ObservadorAuditoria(log_ass)
+    sessao_ass = FabricaAssembleia().criar_sessao(
+        "AGO-OBS",
+        total_aptos=100,
+        observadores=[obs_ass],
+    )
+    assert sessao_ass.observadores == (obs_ass,)
+    sessao_ass.abrir()
+    sessao_ass.liberar_votacao()
+    assert log_ass.registros[0].evento == TipoEvento.VOTACAO_ABERTA
+
+    log_cong = LogDeAuditoria("PL-OBS")
+    obs_cong = ObservadorAuditoria(log_cong)
+    sessao_cong = FabricaCongresso().criar_sessao(
+        "PL-OBS",
+        materia=TipoMateriaCongresso.LEI_ORDINARIA,
+        casa=CasaLegislativa.SENADO,
+        observadores=[obs_cong],
+    )
+    assert sessao_cong.observadores == (obs_cong,)
+    sessao_cong.abrir()
+    sessao_cong.liberar_votacao()
+    assert log_cong.registros[0].evento == TipoEvento.VOTACAO_ABERTA
+
+
+def test_regra_congresso_materia_desconhecida_levanta_value_error():
+    regra = RegraCongresso(
+        materia="MEDIDA_PROVISORIA_INVALIDA",  # type: ignore[arg-type]
+        casa=CasaLegislativa.SENADO,
+    )
+    with pytest.raises(ValueError, match="Matéria desconhecida"):
+        regra._avaliar_aprovacao(votos_sim=50, votos_nao=0, total_presentes=50)
