@@ -6,6 +6,10 @@ import pytest
 
 from votacao.auditoria import LogDeAuditoria, TipoEvento
 from votacao.modelos import StatusResultado, Voto
+from votacao.observadores import (
+    ObservadorAuditoria,
+    ObservadorSessao,
+)
 from votacao.regras.ca import RegraCA
 from votacao.sessao import (
     EstadoSessao,
@@ -477,3 +481,140 @@ def test_sessao_nao_consome_a_identidade_de_procurador_que_nao_leva_o_proprio_ca
     # O capital de AC-P foi gasto pelo voto do PROC-2: ele não pode mais votar por conta própria.
     with pytest.raises(VotoRecusadoError, match="'AC-P' já votou"):
         sessao.registrar_voto(Voto(eleitor_id="AC-P", opcao="NAO", peso=30))
+
+
+# ==============================================================================
+# ATIVIDADE 5 - TESTE DE MUTAÇÃO E ANÁLISE DE VALOR LIMITE EM SESSAOVOTACAO
+# Detecção de mutantes sobreviventes identificados pelo mutmut 3.8.1
+# ==============================================================================
+
+
+def test_mutacao_sessao_aceita_voto_no_instante_exato_do_fim_da_janela():
+    """Mata o mutante `_exigir_dentro_da_janela__mutmut_12` (`agora > fim` -> `agora >= fim`).
+
+    Verifica a fronteira superior inclusiva da janela de votação [inicio, fim]:
+    um voto emitido exatamente no instante `fim` pertence ao intervalo fechado e
+    deve ser aceito pela urna; apenas a partir de `fim + 1s` o voto é recusado.
+    """
+    relogio = RelogioControlado(INICIO - timedelta(seconds=1))
+    sessao = _nova_sessao(relogio=relogio)
+    sessao.abrir()
+    sessao.liberar_votacao(inicio=INICIO, fim=FIM)
+
+    # 1s antes do início -> recusado
+    with pytest.raises(VotoRecusadoError, match="só começa"):
+        sessao.registrar_voto(Voto(eleitor_id="eleitor-antes", opcao="Chapa A"))
+
+    # Exatamente no início -> aceito
+    relogio.agora = INICIO
+    sessao.registrar_voto(Voto(eleitor_id="eleitor-inicio", opcao="Chapa A"))
+
+    # Exatamente no limite de encerramento (agora == FIM) -> deve ser ACEITO
+    relogio.agora = FIM
+    sessao.registrar_voto(Voto(eleitor_id="eleitor-no-fim-exato", opcao="Chapa B"))
+
+    # 1s após o fim (agora > FIM) -> recusado
+    relogio.agora = FIM + timedelta(seconds=1)
+    with pytest.raises(VotoRecusadoError, match="terminou"):
+        sessao.registrar_voto(Voto(eleitor_id="eleitor-apos-fim", opcao="Chapa A"))
+
+    assert [v.eleitor_id for v in sessao.votos] == [
+        "eleitor-inicio",
+        "eleitor-no-fim-exato",
+    ]
+
+
+def test_mutacao_sessao_liberar_votacao_aceita_janela_pontual_inicio_igual_ao_fim():
+    """Mata o mutante `liberar_votacao__mutmut_12` (`inicio > fim` -> `inicio >= fim`).
+
+    Verifica que uma janela degenerada/pontual onde `inicio == fim` é válida
+    (inicio não é posterior ao fim) e aceita voto exatamente naquele instante.
+    """
+    relogio = RelogioControlado(INICIO)
+    sessao = _nova_sessao(relogio=relogio)
+    sessao.abrir()
+
+    sessao.liberar_votacao(inicio=INICIO, fim=INICIO)
+
+    assert sessao.estado == EstadoSessao.EM_VOTACAO
+    assert sessao.inicio_votacao == INICIO
+    assert sessao.fim_votacao == INICIO
+    sessao.registrar_voto(Voto(eleitor_id="eleitor-pontual", opcao="Chapa A"))
+    assert len(sessao.votos) == 1
+
+
+class _ObservadorSemComprovante(ObservadorSessao):
+    """Observador auxiliar sem emissão de protocolo para testes de mutação."""
+
+    def ao_mudar_estado(
+        self, sessao, estado_anterior, novo_estado, evento=None, dados=None
+    ) -> None:
+        pass
+
+    def ao_registrar_voto(self, sessao, voto) -> str | None:
+        return None
+
+
+def test_mutacao_sessao_remover_observador_nao_auditoria_preserva_log_principal():
+    """Mata os mutantes `remover_observador__mutmut_4` e `remover_observador__mutmut_7`.
+
+    Verifica que remover um observador que não é `ObservadorAuditoria` (ou que aponta
+    para outra instância de `LogDeAuditoria`) não limpa a referência `sessao.log`
+    do log principal configurado na sessão.
+    """
+    log_principal = LogDeAuditoria("CA-2026")
+    obs_neutro = _ObservadorSemComprovante()
+    outro_log = LogDeAuditoria("CA-2026")
+    obs_outro_log = ObservadorAuditoria(outro_log)
+
+    sessao = SessaoVotacao(
+        "CA-2026",
+        RegraCA(),
+        total_aptos=10,
+        log=log_principal,
+        observadores=[obs_neutro, obs_outro_log],
+    )
+
+    assert sessao.remover_observador(obs_neutro) is True
+    assert sessao.log is log_principal
+
+    assert sessao.remover_observador(obs_outro_log) is True
+    assert sessao.log is log_principal
+
+
+def test_mutacao_sessao_registrar_voto_preserva_primeiro_comprovante_entre_observadores():
+    """Mata os mutantes `registrar_voto__mutmut_23` e `registrar_voto__mutmut_19`.
+
+    Verifica que, quando múltiplos observadores estão registrados na sessão, o protocolo
+    retornado por `registrar_voto` é o primeiro comprovante não nulo emitido (do log de
+    auditoria oficial), sem ser sobrescrito por observadores subsequentes que retornem
+    outro comprovante ou `None`.
+    """
+
+    class ObservadorComprovanteSecundario(ObservadorSessao):
+        def ao_mudar_estado(
+            self, sessao, estado_anterior, novo_estado, evento=None, dados=None
+        ) -> None:
+            pass
+
+        def ao_registrar_voto(self, sessao, voto) -> str | None:
+            return "PROTOCOLO-SECUNDARIO-NAO-DEVE-SOBRESCREVER"
+
+    log = LogDeAuditoria("CA-2026")
+    obs_secundario = ObservadorComprovanteSecundario()
+    obs_neutro = _ObservadorSemComprovante()
+
+    sessao = SessaoVotacao(
+        "CA-2026",
+        RegraCA(),
+        total_aptos=10,
+        log=log,
+        observadores=[obs_secundario, obs_neutro],
+    )
+    _avancar_ate(sessao, EstadoSessao.EM_VOTACAO)
+
+    protocolo = sessao.registrar_voto(Voto(eleitor_id="101", opcao="Chapa A"))
+
+    assert protocolo is not None
+    assert protocolo != "PROTOCOLO-SECUNDARIO-NAO-DEVE-SOBRESCREVER"
+    assert log.contem_protocolo(protocolo)
