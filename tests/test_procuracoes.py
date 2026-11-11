@@ -466,3 +466,167 @@ def test_titulares_de_procurador_que_nao_e_acionista_sao_so_os_outorgantes(
 
 def test_titulares_de_acionista_sem_procuracoes_e_ele_mesmo(servico: ServicoProcuracao):
     assert servico.calcular_poder_de_voto("AC-B", AGORA).titulares == ("AC-B",)
+
+
+@pytest.mark.parametrize(
+    ("id_classe", "outorgante_id", "procurador_id", "deve_aceitar", "trecho_erro"),
+    [
+        ("outorgante_e_procurador_validos", "AC-A", "PROC-1", True, ""),
+        ("outorgante_inexistente", "AC-FANTASMA", "PROC-1", False, "não encontrado"),
+        ("outorgante_inativo", "AC-INATIVO", "PROC-1", False, "cadastro inativo"),
+        ("outorgante_bloqueado", "AC-BLOQUEADO", "PROC-1", False, "bloqueio"),
+        (
+            "outorgante_sem_acoes_ordinarias",
+            "AC-PREF",
+            "PROC-1",
+            False,
+            "não possui ações ordinárias",
+        ),
+        (
+            "procurador_nao_cadastrado",
+            "AC-A",
+            "PROC-FANTASMA",
+            False,
+            "não está cadastrado",
+        ),
+        (
+            "procurador_descredenciado",
+            "AC-A",
+            "PROC-DESCRED",
+            False,
+            "não está credenciado",
+        ),
+        (
+            "procurador_inativo",
+            "AC-A",
+            "PROC-INATIVO",
+            False,
+            "cadastro inativo",
+        ),
+        ("autodelegacao", "AC-A", "AC-A", False, "a si mesmo"),
+    ],
+)
+def test_procuracao_validade_outorgante_e_procurador(
+    servico: ServicoProcuracao,
+    id_classe: str,
+    outorgante_id: str,
+    procurador_id: str,
+    deve_aceitar: bool,
+    trecho_erro: str,
+):
+    if deve_aceitar:
+        proc = servico.cadastrar(outorgante_id, procurador_id, momento=AGORA)
+        assert proc.outorgante_id == outorgante_id, id_classe
+        assert proc.procurador_id == procurador_id, id_classe
+        assert proc.esta_vigente(AGORA) is True, id_classe
+    else:
+        with pytest.raises(ProcuracaoInvalidaError, match=trecho_erro):
+            servico.cadastrar(outorgante_id, procurador_id, momento=AGORA)
+
+
+@pytest.mark.parametrize(
+    ("id_caso", "acoes_ordinarias", "deve_aceitar", "peso_delegado_esperado"),
+    [
+        ("zero_acoes_ordinarias", 0, False, 0),
+        ("uma_acao_ordinaria", 1, True, 1),
+        ("duas_acoes_ordinarias", 2, True, 2),
+    ],
+)
+def test_procuracao_fronteira_acoes_ordinarias_outorgante(
+    id_caso: str,
+    acoes_ordinarias: int,
+    deve_aceitar: bool,
+    peso_delegado_esperado: int,
+):
+    repositorio = RepositorioAssembleia()
+    repositorio.adicionar_acionista(
+        Acionista(
+            id="AC-LIMITE",
+            nome="Acionista Fronteira",
+            acoes_ordinarias=acoes_ordinarias,
+            acoes_preferenciais=50,
+        )
+    )
+    repositorio.adicionar_procurador(Procurador(id="PROC-1", nome="Procurador Credenciado"))
+    srv = ServicoProcuracao(repositorio)
+
+    if deve_aceitar:
+        procuracao = srv.cadastrar("AC-LIMITE", "PROC-1", momento=AGORA)
+        assert procuracao.esta_vigente(AGORA) is True, id_caso
+        poder = srv.calcular_poder_de_voto("PROC-1", momento=AGORA)
+        assert poder.peso_delegado == peso_delegado_esperado, id_caso
+    else:
+        with pytest.raises(ProcuracaoInvalidaError, match="não possui ações ordinárias"):
+            srv.cadastrar("AC-LIMITE", "PROC-1", momento=AGORA)
+
+
+@pytest.mark.parametrize(
+    ("id_caso", "momento_consulta", "esperado_vigente"),
+    [
+        (
+            "um_segundo_antes_expiracao",
+            EM_30_DIAS - timedelta(seconds=1),
+            True,
+        ),
+        (
+            "no_instante_exato_expiracao",
+            EM_30_DIAS,
+            True,
+        ),
+        (
+            "um_segundo_apos_expiracao",
+            EM_30_DIAS + timedelta(seconds=1),
+            False,
+        ),
+    ],
+)
+def test_procuracao_fronteira_temporal_vigencia(
+    servico: ServicoProcuracao,
+    id_caso: str,
+    momento_consulta: datetime,
+    esperado_vigente: bool,
+):
+    procuracao = servico.cadastrar("AC-A", "PROC-1", data_expiracao=EM_30_DIAS, momento=AGORA)
+
+    assert procuracao.esta_vigente(momento_consulta) is esperado_vigente, id_caso
+    vigente_no_repo = servico.obter_vigente("AC-A", momento=momento_consulta)
+    if esperado_vigente:
+        assert vigente_no_repo == procuracao, id_caso
+    else:
+        assert vigente_no_repo is None, id_caso
+
+
+@pytest.mark.parametrize(
+    ("id_caso", "data_expiracao_cadastro", "deve_aceitar"),
+    [
+        ("cadastro_expiracao_1s_antes", AGORA - timedelta(seconds=1), False),
+        ("cadastro_expiracao_no_instante_exato", AGORA, True),
+        ("cadastro_expiracao_1s_depois", AGORA + timedelta(seconds=1), True),
+    ],
+)
+def test_procuracao_fronteira_temporal_no_cadastro(
+    id_caso: str,
+    data_expiracao_cadastro: datetime,
+    deve_aceitar: bool,
+):
+    repositorio = RepositorioAssembleia()
+    repositorio.adicionar_acionista(Acionista(id="AC-A", nome="Alfa", acoes_ordinarias=100))
+    repositorio.adicionar_procurador(Procurador(id="PROC-1", nome="Advocacia Um"))
+    srv = ServicoProcuracao(repositorio)
+
+    if deve_aceitar:
+        proc = srv.cadastrar(
+            "AC-A",
+            "PROC-1",
+            data_expiracao=data_expiracao_cadastro,
+            momento=AGORA,
+        )
+        assert proc.esta_vigente(AGORA) is True, id_caso
+    else:
+        with pytest.raises(ProcuracaoInvalidaError, match="precisa estar no futuro"):
+            srv.cadastrar(
+                "AC-A",
+                "PROC-1",
+                data_expiracao=data_expiracao_cadastro,
+                momento=AGORA,
+            )
