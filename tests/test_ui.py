@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Iterator
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -380,9 +381,11 @@ class TestEstadoAplicacaoUI:
 class TestServidorHTTP:
     """Valida as rotas REST e o fornecimento de arquivos estáticos pelo servidor HTTP."""
 
-    @classmethod
+    # A ordem importa: @pytest.fixture precisa envolver o classmethod. Com
+    # @classmethod por fora, o pytest não reconhece a fixture.
     @pytest.fixture(scope="class")
-    def servidor_teste(cls) -> tuple[str, EstadoAplicacaoUI]:
+    @classmethod
+    def servidor_teste(cls) -> Iterator[tuple[str, EstadoAplicacaoUI]]:
         app = EstadoAplicacaoUI()
         servidor = criar_servidor(host="127.0.0.1", porta=0, estado_app=app, silencioso=True)
         porta = servidor.server_address[1]
@@ -565,3 +568,45 @@ class TestServidorHTTP:
         # Resetar via POST
         status_reset, _ = self._post(base_url, "/api/resetar", {"usar_sql": False})
         assert status_reset == 200
+
+    def test_resetar_com_sql_em_thread_do_servidor(
+        self, servidor_teste: tuple[str, EstadoAplicacaoUI]
+    ) -> None:
+        # O estado (e a conexão SQLite) é criado na thread do teste, mas a
+        # requisição é atendida em outra thread do servidor: antes da correção,
+        # isso levantava sqlite3.ProgrammingError e esvaziava os cadastros.
+        base_url, _ = servidor_teste
+        status, estado = self._post(base_url, "/api/resetar", {"usar_sql": True})
+        assert status == 200
+        assert len(estado["ca"]["discentes"]) > 0
+        assert "ELEICAO-CA-2026" in estado["sessoes"]
+
+    def test_conflitos_de_estado_retornam_409(
+        self, servidor_teste: tuple[str, EstadoAplicacaoUI]
+    ) -> None:
+        base_url, _ = servidor_teste
+        self._post(
+            base_url,
+            "/api/sessoes",
+            {
+                "id_sessao": "SESSAO-CONFLITO",
+                "contexto": "CA",
+                "abrir_imediatamente": True,
+                "liberar_imediatamente": True,
+            },
+        )
+        voto = {"eleitor_id": "247314", "opcao": "Chapa Renova"}
+        assert self._post(base_url, "/api/sessoes/SESSAO-CONFLITO/votar", voto)[0] == 200
+
+        # Voto duplicado é recusado pela sessão: conflito, não erro interno
+        st_dup, res_dup = self._post(base_url, "/api/sessoes/SESSAO-CONFLITO/votar", voto)
+        assert st_dup == 409
+        assert "já votou" in res_dup["erro"]
+
+        # Encerrar e depois apurar (EM_APURACAO -> ENCERRADA) é o fluxo válido
+        assert self._post(base_url, "/api/sessoes/SESSAO-CONFLITO/encerrar", {})[0] == 200
+        assert self._post(base_url, "/api/sessoes/SESSAO-CONFLITO/apurar", {})[0] == 200
+
+        # Apurar de novo uma sessão já encerrada é transição inválida
+        st_rep, _ = self._post(base_url, "/api/sessoes/SESSAO-CONFLITO/apurar", {})
+        assert st_rep == 409

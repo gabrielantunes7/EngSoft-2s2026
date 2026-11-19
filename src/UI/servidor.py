@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import threading
 import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,6 +13,8 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from UI.app import EstadoAplicacaoUI
+from votacao.sessao import TransicaoInvalidaError, VotoRecusadoError
+from votacao.tramitacao import TramitacaoInvalidaError
 
 DIRETORIO_STATIC = Path(__file__).resolve().parent / "static"
 
@@ -39,6 +42,9 @@ class ServidorVotacaoHTTP(ThreadingHTTPServer):
     ) -> None:
         self.estado_app = estado_app or EstadoAplicacaoUI()
         self.silencioso = silencioso
+        # Cada requisição roda em uma thread, mas o estado (sessões em memória e a
+        # conexão SQLite) não é thread-safe: todo acesso a ele passa por esta trava.
+        self.trava_estado = threading.Lock()
         super().__init__(endereco, manipulador)
 
 
@@ -69,13 +75,17 @@ class ManipuladorRequisicoesUI(BaseHTTPRequestHandler):
             return
 
         if caminho == "/api/estado":
-            self._enviar_json(HTTPStatus.OK, self.app.obter_estado_completo())
+            with self.server.trava_estado:
+                estado = self.app.obter_estado_completo()
+            self._enviar_json(HTTPStatus.OK, estado)
             return
 
         if caminho.startswith("/api/sessoes/"):
             id_sessao = unquote(caminho.removeprefix("/api/sessoes/")).strip("/")
             try:
-                self._enviar_json(HTTPStatus.OK, self.app.serializar_sessao(id_sessao))
+                with self.server.trava_estado:
+                    sessao = self.app.serializar_sessao(id_sessao)
+                self._enviar_json(HTTPStatus.OK, sessao)
             except KeyError as exc:
                 self._enviar_json(HTTPStatus.NOT_FOUND, {"erro": str(exc.args[0])})
             return
@@ -93,13 +103,18 @@ class ManipuladorRequisicoesUI(BaseHTTPRequestHandler):
         caminho = urlparse(self.path).path
         try:
             corpo = self._ler_corpo_json()
-            status, resposta = self._rotear_post(caminho, corpo)
+            with self.server.trava_estado:
+                status, resposta = self._rotear_post(caminho, corpo)
             self._enviar_json(status, resposta)
         except KeyError as exc:
             msg = exc.args[0] if exc.args else str(exc)
             self._enviar_json(HTTPStatus.NOT_FOUND, {"erro": str(msg)})
         except PermissionError as exc:
             self._enviar_json(HTTPStatus.FORBIDDEN, {"erro": str(exc)})
+        except (VotoRecusadoError, TransicaoInvalidaError, TramitacaoInvalidaError) as exc:
+            # Recusas do domínio (voto duplicado, fora da janela, transição de estado
+            # inválida) dependem do estado atual da sessão: conflito, não erro interno.
+            self._enviar_json(HTTPStatus.CONFLICT, {"erro": str(exc)})
         except ValueError as exc:
             self._enviar_json(HTTPStatus.BAD_REQUEST, {"erro": str(exc)})
         except Exception as exc:  # pragma: no cover - salvaguarda para erros inesperados

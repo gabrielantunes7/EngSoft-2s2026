@@ -186,6 +186,16 @@ html, body {
   gap: 0.75rem;
 }
 
+/* Os botões contornados herdam a cor de texto escura do conteúdo; sobre o
+   fundo escuro da barra lateral eles precisam de texto e borda claros. */
+.sidebar-footer .btn-outline {
+  color: #e2e8f0;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+.sidebar-footer .btn-outline:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .system-pill {
   display: flex;
   align-items: center;

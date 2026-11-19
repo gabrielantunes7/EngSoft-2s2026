@@ -5,6 +5,10 @@
 let estadoApp = null;
 let sessaoSelecionadaId = null;
 let opcaoVotoSelecionada = null;
+// Estado da urna que precisa sobreviver ao redesenho da tela após cada voto:
+// o último recibo emitido (por sessão) e o eleitor escolhido no seletor.
+let ultimoReciboVoto = null; // { idSessao, protocolo }
+let eleitorUrnaSelecionado = null;
 
 // ==========================================================================
 // INICIALIZAÇÃO E CICLO DE VIDA
@@ -118,6 +122,10 @@ function navegarPara(tabId) {
   document.getElementById("page-title").textContent = t[0];
   document.getElementById("page-subtitle").textContent = t[1];
 
+  // Cada aba começa do topo; sem isso a nova aba herda a rolagem da anterior.
+  window.scrollTo(0, 0);
+  document.getElementById("content-viewport")?.scrollTo(0, 0);
+
   fecharMenuMobile();
 }
 
@@ -164,9 +172,31 @@ function mostrarToast(mensagem, tipo = "info") {
   }, 4000);
 }
 
-async function resetarSistema(usarSql = false) {
-  const desc = usarSql ? "recarregar os dados dos scripts SQL" : "restaurar os dados padrão em memória";
-  if (!confirm(`Deseja realmente ${desc}? Todas as sessões em andamento serão reinicializadas.`)) {
+// Confirmação em dois cliques no próprio botão, em vez de window.confirm():
+// navegadores embutidos e alguns modos de gravação descartam o diálogo nativo
+// (confirm() retorna false sem exibir nada) e o reset nunca era executado.
+function pedirConfirmacaoNoBotao(botao, mensagem) {
+  if (botao.dataset.confirmando === "1") {
+    clearTimeout(Number(botao.dataset.timer));
+    botao.dataset.confirmando = "";
+    botao.innerHTML = botao.dataset.textoOriginal;
+    return true;
+  }
+  botao.dataset.confirmando = "1";
+  botao.dataset.textoOriginal = botao.innerHTML;
+  botao.innerHTML = mensagem;
+  botao.dataset.timer = String(
+    setTimeout(() => {
+      botao.dataset.confirmando = "";
+      botao.innerHTML = botao.dataset.textoOriginal;
+    }, 4000)
+  );
+  return false;
+}
+
+async function resetarSistema(usarSql = false, botao = null) {
+  if (botao && !pedirConfirmacaoNoBotao(botao, "⚠️ Clique de novo para confirmar")) {
+    mostrarToast("Todas as sessões em andamento serão reinicializadas. Clique de novo para confirmar.", "info");
     return;
   }
   try {
@@ -359,11 +389,15 @@ function renderizarDetalheSessao(idSessao) {
   const podeAbrir = sessao.estado === "CRIADA";
   const podeLiberar = sessao.estado === "ABERTA" || sessao.estado === "CRIADA";
   const podeEncerrar = sessao.estado === "EM_VOTACAO";
-  const podeApurar = sessao.estado === "EM_VOTACAO" || sessao.estado === "ENCERRADA";
+  // Apurar é permitido direto da votação (o servidor encerra antes) ou após o
+  // encerramento da urna (EM_APURACAO). Uma sessão ENCERRADA já foi apurada.
+  const podeApurar = sessao.estado === "EM_VOTACAO" || sessao.estado === "EM_APURACAO";
 
-  // Stepper visual dos estados
-  const estados = ["CRIADA", "ABERTA", "EM_VOTACAO", "ENCERRADA"];
+  // Stepper visual dos estados: EM_APURACAO deixa a etapa 4 ativa (em andamento)
+  // e ENCERRADA a marca como concluída.
+  const estados = ["CRIADA", "ABERTA", "EM_VOTACAO", "EM_APURACAO", "ENCERRADA"];
   const ordemAtual = estados.indexOf(sessao.estado);
+  const rotuloEtapaFinal = sessao.estado === "EM_APURACAO" ? "Em Apuração" : "Encerrada / Apurada";
 
   const stepperHtml = `
     <div class="session-stepper">
@@ -379,8 +413,8 @@ function renderizarDetalheSessao(idSessao) {
         <span class="step-dot">${ordemAtual > 2 ? "✓" : "3"}</span> Em Votação
       </div>
       <div class="step-divider"></div>
-      <div class="step-item ${ordemAtual >= 3 ? "completed" : ""}">
-        <span class="step-dot">${ordemAtual >= 3 ? "✓" : "4"}</span> Encerrada / Apurada
+      <div class="step-item ${ordemAtual >= 3 ? (ordemAtual === 3 ? "active" : "completed") : ""}">
+        <span class="step-dot">${ordemAtual > 3 ? "✓" : "4"}</span> ${rotuloEtapaFinal}
       </div>
     </div>
   `;
@@ -399,7 +433,9 @@ function renderizarDetalheSessao(idSessao) {
         <p style="font-size: 0.85rem; color: var(--text-muted);">
           A urna só aceita votos quando a sessão estiver no estado <strong>EM_VOTACAO</strong>.
           ${podeLiberar ? "Clique em 'Liberar Votação' abaixo para permitir votos." : ""}
+          ${sessao.estado === "EM_APURACAO" ? "Urna fechada: clique em 'Apurar Resultado' para concluir a sessão." : ""}
         </p>
+        ${montarReciboVotoHtml(sessao.id_sessao)}
       </div>
     `;
   }
@@ -469,7 +505,7 @@ function montarUrnaEletronicaHtml(sessao, meta, contexto) {
         <div class="form-row">
           <div class="form-group">
             <label for="urna-eleitor-id">Identificação do Eleitor / Votante</label>
-            <select id="urna-eleitor-id" required onchange="aoTrocarEleitorUrna('${contexto}')"></select>
+            <select id="urna-eleitor-id" required onchange="aoTrocarEleitorUrna(this.value)"></select>
           </div>
           ${
             contexto === "ASSEMBLEIA"
@@ -503,7 +539,7 @@ function montarUrnaEletronicaHtml(sessao, meta, contexto) {
         </button>
       </form>
 
-      <div id="resultado-voto-protocolo" style="display: none;"></div>
+      ${montarReciboVotoHtml(sessao.id_sessao)}
 
       ${
         contexto === "CONGRESSO"
@@ -531,7 +567,7 @@ function montarUrnaEletronicaHtml(sessao, meta, contexto) {
               <label style="font-size: 0.72rem;">BRANCO</label>
               <input type="number" id="sim-votos-branco" value="5" min="0" style="padding: 0.3rem;" />
             </div>
-            <button type="submit" class="btn btn-secondary btn-sm">Lançar Bancada</button>
+            <button type="submit" class="btn btn-secondary btn-sm" style="flex: 1 0 100%;">Lançar Bancada</button>
           </form>
         </div>
       `
@@ -575,6 +611,20 @@ function preencherEleitoresUrna(contexto, sessao) {
   }
 
   select.innerHTML = opcoes.map((o) => `<option value="${o.id}">${o.nome}</option>`).join("");
+  if (eleitorUrnaSelecionado && opcoes.some((o) => o.id === eleitorUrnaSelecionado)) {
+    select.value = eleitorUrnaSelecionado;
+  }
+}
+
+function montarReciboVotoHtml(idSessao) {
+  if (!ultimoReciboVoto || ultimoReciboVoto.idSessao !== idSessao) return "";
+  return `
+    <div id="resultado-voto-protocolo" class="protocolo-box">
+      <strong>🔐 Protocolo Criptográfico de Voto (SHA-256):</strong><br />
+      <code>${ultimoReciboVoto.protocolo}</code><br />
+      <small style="color: #94a3b8;">Guarde este hash para verificar a integridade do seu voto na aba de Auditoria.</small>
+    </div>
+  `;
 }
 
 function selecionarOpcaoVoto(opcao) {
@@ -608,8 +658,8 @@ function aoTrocarModoAssembleia() {
   }
 }
 
-function aoTrocarEleitorUrna(contexto) {
-  // Hook opcional para validações instantâneas
+function aoTrocarEleitorUrna(eleitorId) {
+  eleitorUrnaSelecionado = eleitorId;
 }
 
 async function submeterVotoUrna(event, idSessao) {
@@ -642,19 +692,11 @@ async function submeterVotoUrna(event, idSessao) {
     });
 
     mostrarToast(`Voto registrado com sucesso!`, "success");
-    const protBox = document.getElementById("resultado-voto-protocolo");
-    if (protBox) {
-      protBox.style.display = "block";
-      protBox.innerHTML = `
-        <div class="protocolo-box">
-          <strong>🔐 Protocolo Criptográfico de Voto (SHA-256):</strong><br />
-          <code>${res.protocolo}</code><br />
-          <small style="color: #94a3b8;">Guarde este hash para verificar a integridade do seu voto na aba de Auditoria.</small>
-        </div>
-      `;
-    }
+    // Guarda o recibo antes de redesenhar: o painel da urna é recriado por
+    // carregarEstadoCompleto() e o exibe a partir deste estado.
+    ultimoReciboVoto = { idSessao, protocolo: res.protocolo };
+    eleitorUrnaSelecionado = eleitorId;
 
-    // Atualiza estado
     await carregarEstadoCompleto();
   } catch (err) {
     mostrarToast(`Erro ao votar: ${err.message}`, "error");
@@ -713,7 +755,7 @@ function montarResultadoApuracaoHtml(sessao) {
         <div class="chart-row">
           <div class="chart-row-label">
             <span>${opcao}</span>
-            <span>${votos} votos (${perc}%)</span>
+            <span>${votos} ${votos === 1 ? "voto" : "votos"} (${perc}%)</span>
           </div>
           <div class="chart-bar-bg">
             <div class="chart-bar-fill ${corClass}" style="width: ${perc}%;"></div>
