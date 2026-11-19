@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Sistema de Votação Multi-Institucional — Interface Gráfica</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell" id="app-shell">
+    <!-- Overlay para menu mobile -->
+    <div class="sidebar-backdrop" id="sidebar-backdrop" onclick="fecharMenuMobile()"></div>
+
+    <!-- Barra Lateral (Desktop) / Drawer (Mobile) -->
+    <aside class="sidebar" id="sidebar" aria-label="Menu principal">
+      <div class="sidebar-brand">
+        <div class="brand-logo" aria-hidden="true">🗳️</div>
+        <div class="brand-text">
+          <h1>Votação <span>Unicamp</span></h1>
+          <p>Plataforma Multi-Contexto</p>
+        </div>
+        <button class="btn-icon mobile-only" onclick="fecharMenuMobile()" aria-label="Fechar menu">✕</button>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-tab="dashboard" onclick="navegarPara('dashboard')">
+          <span class="nav-icon">📊</span>
+          <span class="nav-label">Painel Geral</span>
+        </button>
+        <button class="nav-item" data-tab="sessoes" onclick="navegarPara('sessoes')">
+          <span class="nav-icon">🗳️</span>
+          <span class="nav-label">Sessões &amp; Urna</span>
+          <span class="nav-badge" id="badge-sessoes-ativas">0</span>
+        </button>
+        <button class="nav-item" data-tab="ca" onclick="navegarPara('ca')">
+          <span class="nav-icon">🎓</span>
+          <span class="nav-label">Centro Acadêmico</span>
+        </button>
+        <button class="nav-item" data-tab="assembleia" onclick="navegarPara('assembleia')">
+          <span class="nav-icon">🏢</span>
+          <span class="nav-label">Assembleia S.A.</span>
+        </button>
+        <button class="nav-item" data-tab="congresso" onclick="navegarPara('congresso')">
+          <span class="nav-icon">🏛️</span>
+          <span class="nav-label">Congresso &amp; Leis</span>
+        </button>
+        <button class="nav-item" data-tab="auditoria" onclick="navegarPara('auditoria')">
+          <span class="nav-icon">🔐</span>
+          <span class="nav-label">Auditoria SHA-256</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="system-pill">
+          <span class="status-dot online"></span>
+          <span id="status-conexao">Sistema Operacional Ativo</span>
+        </div>
+        <div class="sidebar-actions">
+          <button class="btn btn-outline btn-sm btn-block" onclick="resetarSistema(false)" title="Restaurar dados padrão em memória">
+            🔄 Restaurar Padrão
+          </button>
+          <button class="btn btn-outline btn-sm btn-block" onclick="resetarSistema(true)" title="Recarregar seeds dos scripts SQL">
+            🗄️ Recarregar SQL
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Área Principal -->
+    <div class="main-wrapper">
+      <!-- Cabeçalho Superior Responsivo -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="btn-icon mobile-menu-trigger" onclick="abrirMenuMobile()" aria-label="Abrir menu">
+            ☰
+          </button>
+          <div>
+            <h2 class="page-title" id="page-title">Painel Geral do Sistema</h2>
+            <p class="page-subtitle" id="page-subtitle">
+              Visão consolidada das votações estudantis, societárias e legislativas
+            </p>
+          </div>
+        </div>
+
+        <div class="topbar-right">
+          <div class="viewport-switcher" title="Alternar modo de visualização de tela">
+            <span class="viewport-label" id="indicador-dispositivo">🖥️ Auto</span>
+            <select id="seletor-viewport" onchange="alterarSimulacaoViewport(this.value)" aria-label="Modo de tela">
+              <option value="auto">Tela Automática (Responsiva)</option>
+              <option value="desktop">Desktop (Largura Total)</option>
+              <option value="tablet">Simular Tablet (768px)</option>
+              <option value="mobile">Simular Celular (390px)</option>
+            </select>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="irParaNovaSessao()">
+            + Nova Votação
+          </button>
+        </div>
+      </header>
+
+      <!-- Container de Visualização (adapta-se ao dispositivo ou simulador) -->
+      <main class="content-viewport" id="content-viewport">
+        <!-- ===============================================================
+             ABA 1: PAINEL GERAL (DASHBOARD)
+             =============================================================== -->
+        <section class="tab-view active" id="view-dashboard">
+          <div class="kpi-grid" id="dashboard-kpis">
+            <!-- Preenchido via JS -->
+          </div>
+
+          <div class="grid-2-col">
+            <!-- Sessões de Votação em Destaque -->
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h3>🗳️ Sessões de Votação</h3>
+                  <p class="card-subtitle">Acompanhe, vote, inicie ou encerre votações em andamento</p>
+                </div>
+                <button class="btn btn-outline btn-sm" onclick="navegarPara('sessoes')">
+                  Ver Urna Completa →
+                </button>
+              </div>
+              <div class="session-list" id="dashboard-lista-sessoes">
+                <!-- Preenchido via JS -->
+              </div>
+            </div>
+
+            <!-- Consulta Rápida de Aptidão e Elegibilidade -->
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h3>🪪 Consulta Rápida de Aptidão</h3>
+                  <p class="card-subtitle">Valide se um eleitor ou procurador está apto a votar</p>
+                </div>
+              </div>
+              <form id="form-consulta-aptidao" onsubmit="submeterConsultaAptidao(event)" class="form-stack">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="apt-contexto">Contexto Institucional</label>
+                    <select id="apt-contexto" onchange="atualizarOpcoesConsultaAptidao()">
+                      <option value="CA">🎓 Centro Acadêmico (CA)</option>
+                      <option value="ASSEMBLEIA">🏢 Assembleia de Acionistas</option>
+                      <option value="CONGRESSO">🏛️ Congresso Nacional</option>
+                    </select>
+                  </div>
+                  <div class="form-group" id="grupo-apt-casa" style="display: none;">
+                    <label for="apt-casa">Casa Legislativa</label>
+                    <select id="apt-casa" onchange="atualizarOpcoesConsultaAptidao()">
+                      <option value="CAMARA">Câmara dos Deputados</option>
+                      <option value="SENADO">Senado Federal</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="apt-eleitor">Eleitor / Titular</label>
+                    <select id="apt-eleitor" required></select>
+                  </div>
+                  <div class="form-group" id="grupo-apt-procurador" style="display: none;">
+                    <label for="apt-procurador">Procurador (Opcional)</label>
+                    <select id="apt-procurador">
+                      <option value="">— Voto Direto (Sem Procurador) —</option>
+                    </select>
+                  </div>
+                </div>
+
+                <button type="submit" class="btn btn-secondary">
+                  Verificar Elegibilidade e Peso do Voto
+                </button>
+              </form>
+
+              <div id="resultado-consulta-aptidao" class="aptidao-result-box" style="display: none;"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===============================================================
+             ABA 2: SESSÕES DE VOTAÇÃO & URNA ELETRÔNICA
+             =============================================================== -->
+        <section class="tab-view" id="view-sessoes">
+          <div class="grid-urna-layout">
+            <!-- Coluna Esquerda: Seletor de Sessões + Criação de Nova Sessão -->
+            <div class="stack-col">
+              <div class="card">
+                <div class="card-header">
+                  <div>
+                    <h3>📋 Sessões Cadastradas</h3>
+                    <p class="card-subtitle">Selecione uma sessão para operar a urna ou gerenciar estados</p>
+                  </div>
+                </div>
+                <div class="session-selector-list" id="lista-seletor-sessoes"></div>
+              </div>
+
+              <div class="card" id="card-criar-sessao">
+                <div class="card-header">
+                  <div>
+                    <h3>➕ Criar Nova Sessão de Votação</h3>
+                    <p class="card-subtitle">Configure as regras de quórum e apuração por fábrica</p>
+                  </div>
+                </div>
+                <form id="form-criar-sessao" onsubmit="submeterCriarSessao(event)" class="form-stack">
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label for="nova-sessao-id">ID da Sessão</label>
+                      <input type="text" id="nova-sessao-id" placeholder="Ex: ELEICAO-CA-2026-2" required />
+                    </div>
+                    <div class="form-group">
+                      <label for="nova-sessao-contexto">Contexto</label>
+                      <select id="nova-sessao-contexto" onchange="alternarCamposNovaSessao()">
+                        <option value="CA">🎓 Centro Acadêmico (CA)</option>
+                        <option value="ASSEMBLEIA">🏢 Assembleia de Acionistas</option>
+                        <option value="CONGRESSO">🏛️ Congresso Nacional</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="form-group">
+                    <label for="nova-sessao-titulo">Título / Pauta da Votação</label>
+                    <input type="text" id="nova-sessao-titulo" placeholder="Ex: Eleição da Gestão 2026/2027" required />
+                  </div>
+
+                  <!-- Campos específicos CA -->
+                  <div id="campos-sessao-ca" class="context-fields">
+                    <div class="form-row">
+                      <div class="form-group">
+                        <label for="ca-quorum-min">Quórum Mínimo (Votantes)</label>
+                        <input type="number" id="ca-quorum-min" value="2" min="1" />
+                      </div>
+                      <div class="form-group">
+                        <label for="ca-quorum-perc">Quórum Percentual (0 a 1)</label>
+                        <input type="number" id="ca-quorum-perc" value="0.20" min="0" max="1" step="0.05" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Campos específicos Assembleia -->
+                  <div id="campos-sessao-assembleia" class="context-fields" style="display: none;">
+                    <div class="form-row">
+                      <div class="form-group">
+                        <label for="ass-tipo-decisao">Regra de Decisão</label>
+                        <select id="ass-tipo-decisao">
+                          <option value="MAIORIA_SIMPLES">Maioria Simples (Presentes)</option>
+                          <option value="MAIORIA_ABSOLUTA">Maioria Absoluta (&gt; 50%)</option>
+                          <option value="QUALIFICADA_DOIS_TERCOS">Quórum Qualificado (2/3)</option>
+                          <option value="QUALIFICADA_TRES_QUINTOS">Quórum Qualificado (3/5)</option>
+                        </select>
+                      </div>
+                      <div class="form-group">
+                        <label for="ass-quorum-inst">Quórum Instalação (0 a 1)</label>
+                        <input type="number" id="ass-quorum-inst" value="0.25" min="0" max="1" step="0.05" />
+                      </div>
+                    </div>
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="ass-base-capital-total" />
+                      Calcular aprovação sobre o Capital Votante Total (em vez dos presentes)
+                    </label>
+                  </div>
+
+                  <!-- Campos específicos Congresso -->
+                  <div id="campos-sessao-congresso" class="context-fields" style="display: none;">
+                    <div class="form-row">
+                      <div class="form-group">
+                        <label for="cong-casa">Casa Legislativa</label>
+                        <select id="cong-casa">
+                          <option value="CAMARA">Câmara dos Deputados (513)</option>
+                          <option value="SENADO">Senado Federal (81)</option>
+                        </select>
+                      </div>
+                      <div class="form-group">
+                        <label for="cong-materia">Espécie Normativa</label>
+                        <select id="cong-materia">
+                          <option value="PL">PL — Projeto de Lei Ordinária</option>
+                          <option value="PLP">PLP — Projeto de Lei Complementar</option>
+                          <option value="PEC">PEC — Emenda à Constituição (3/5)</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="checkbox-row">
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="nova-sessao-abrir" checked />
+                      Abrir sessão imediatamente
+                    </label>
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="nova-sessao-liberar" checked />
+                      Liberar urna para votação
+                    </label>
+                  </div>
+
+                  <button type="submit" class="btn btn-primary btn-block">
+                    Criar Sessão de Votação
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            <!-- Coluna Direita: Painel da Sessão Selecionada, Urna e Apuração -->
+            <div class="stack-col" id="painel-detalhe-sessao">
+              <!-- Preenchido dinamicamente via JS -->
+            </div>
+          </div>
+        </section>
+
+        <!-- ===============================================================
+             ABA 3: CENTRO ACADÊMICO (CA)
+             =============================================================== -->
+        <section class="tab-view" id="view-ca">
+          <div class="grid-2-col">
+            <!-- Cadastro de Discente -->
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h3>🎓 Cadastrar Novo Discente (Eleitor CA)</h3>
+                  <p class="card-subtitle">Voto único (peso 1) para estudantes regulares com matrícula ativa</p>
+                </div>
+              </div>
+              <form id="form-ca-discente" onsubmit="submeterCadastroDiscente(event)" class="form-stack">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="ca-disc-ra">RA (Registro Acadêmico)</label>
+                    <input type="text" id="ca-disc-ra" placeholder="Ex: 202615" required />
+                  </div>
+                  <div class="form-group">
+                    <label for="ca-disc-nome">Nome Completo</label>
+                    <input type="text" id="ca-disc-nome" placeholder="Ex: Marina Costa" required />
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="ca-disc-curso">Curso</label>
+                    <input type="text" id="ca-disc-curso" value="Engenharia de Computação" required />
+                  </div>
+                  <div class="form-group">
+                    <label for="ca-disc-semestre">Semestre Atual</label>
+                    <input type="number" id="ca-disc-semestre" value="5" min="1" max="20" required />
+                  </div>
+                </div>
+                <div class="checkbox-grid">
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="ca-disc-ativa" checked /> Matrícula Ativa
+                  </label>
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="ca-disc-regular" checked /> Situação Regular
+                  </label>
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="ca-disc-suspenso" /> Suspenso Disciplinarmente
+                  </label>
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="ca-disc-formado" /> Já Formado
+                  </label>
+                </div>
+                <button type="submit" class="btn btn-primary">Cadastrar Discente</button>
+              </form>
+            </div>
+
+            <!-- Cadastro de Chapa -->
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h3>🚩 Cadastrar Nova Chapa / Candidatura CA</h3>
+                  <p class="card-subtitle">Exige presidente e vice com matrícula ativa e situação regular</p>
+                </div>
+              </div>
+              <form id="form-ca-chapa" onsubmit="submeterCadastroChapa(event)" class="form-stack">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="ca-chapa-id">Código da Chapa</label>
+                    <input type="text" id="ca-chapa-id" placeholder="Ex: CHAPA-05" required />
+                  </div>
+                  <div class="form-group">
+                    <label for="ca-chapa-nome">Nome da Chapa</label>
+                    <input type="text" id="ca-chapa-nome" placeholder="Ex: Chapa Voz Estudantil" required />
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="ca-chapa-proposta">Síntese da Proposta</label>
+                  <input type="text" id="ca-chapa-proposta" placeholder="Ex: Ampliação de bolsas e melhorias nos laboratórios" required />
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="ca-chapa-pres">Presidente (RA)</label>
+                    <select id="ca-chapa-pres" required></select>
+                  </div>
+                  <div class="form-group">
+                    <label for="ca-chapa-vice">Vice-Presidente (RA)</label>
+                    <select id="ca-chapa-vice" required></select>
+                  </div>
+                </div>
+                <label class="checkbox-label">
+                  <input type="checkbox" id="ca-chapa-regular" checked /> Documentação Eleitoral Regular
+                </label>
+                <button type="submit" class="btn btn-primary">Registrar Chapa no CA</button>
+              </form>
+            </div>
+          </div>
+
+          <div class="grid-2-col">
+            <div class="card">
+              <div class="card-header">
+                <h3>🚩 Chapas Concorrentes</h3>
+              </div>
+              <div class="table-responsive" id="tabela-ca-chapas"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h3>🎓 Colégio Eleitoral Discente</h3>
+              </div>
+              <div class="table-responsive" id="tabela-ca-discentes"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===============================================================
+             ABA 4: ASSEMBLEIA DE ACIONISTAS E PROCURAÇÕES
+             =============================================================== -->
+        <section class="tab-view" id="view-assembleia">
+          <div class="grid-2-col">
+            <!-- Cadastrar Acionista -->
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h3>💼 Cadastrar Acionista</h3>
+                  <p class="card-subtitle">O peso do voto corresponde ao total de ações com direito a voto</p>
+                </div>
+              </div>
+              <form id="form-ass-acionista" onsubmit="submeterCadastroAcionista(event)" class="form-stack">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="ass-ac-id">ID do Acionista</label>
+                    <input type="text" id="ass-ac-id" placeholder="Ex: AC-09" required />
+                  </div>
+                  <div class="form-group">
+                    <label for="ass-ac-nome">Nome / Razão Social</label>
+                    <input type="text" id="ass-ac-nome" placeholder="Ex: Aurora Partners FIA" required />
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="ass-ac-on">Ações Ordinárias (ON)</label>
+                    <input type="number" id="ass-ac-on" value="15000" min="0" required />
+                  </div>
+                  <div class="form-group">
+                    <label for="ass-ac-pn">Ações Preferenciais (PN)</label>
+                    <input type="number" id="ass-ac-pn" value="5000" min="0" required />
+                  </div>
+                </div>
+                <div class="checkbox-grid">
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="ass-ac-pn-voto" /> PN com Direito a Voto
+                  </label>
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="ass-ac-adimplente" checked /> Acionista Adimplente
+                  </label>
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="ass-ac-impedido" /> Conflito / Impedido
+                  </label>
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="ass-ac-ativo" checked /> Cadastro Ativo
+                  </label>
+                </div>
+                <button type="submit" class="btn btn-primary">Cadastrar Acionista</button>
+              </form>
+            </div>
+
+            <!-- Outorgar Procuração & Cadastrar Procurador/Candidato -->
+            <div class="stack-col">
+              <div class="card">
+                <div class="card-header">
+                  <div>
+                    <h3>📜 Outorgar Procuração de Voto</h3>
+                    <p class="card-subtitle">Delega ações votantes a um procurador credenciado (bloqueia ciclos)</p>
+                  </div>
+                </div>
+                <form id="form-ass-procuracao" onsubmit="submeterCadastroProcuracao(event)" class="form-stack">
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label for="ass-proc-outorgante">Acionista Outorgante</label>
+                      <select id="ass-proc-outorgante" required></select>
+                    </div>
+                    <div class="form-group">
+                      <label for="ass-proc-procurador">Procurador Representante</label>
+                      <select id="ass-proc-procurador" required></select>
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label for="ass-proc-dias">Validade (Dias)</label>
+                      <input type="number" id="ass-proc-dias" value="30" min="1" max="365" required />
+                    </div>
+                    <div class="form-group form-group-end">
+                      <button type="submit" class="btn btn-primary btn-block">Outorgar Procuração</button>
+                    </div>
+                  </div>
+                </form>
+              </div>
+
+              <div class="grid-2-col-inner">
+                <div class="card">
+                  <div class="card-header">
+                    <h3>👔 Novo Procurador</h3>
+                  </div>
+                  <form id="form-ass-procurador" onsubmit="submeterCadastroProcurador(event)" class="form-stack">
+                    <div class="form-group">
+                      <label for="ass-pr-id">ID Procurador</label>
+                      <input type="text" id="ass-pr-id" placeholder="Ex: PROC-04" required />
+                    </div>
+                    <div class="form-group">
+                      <label for="ass-pr-nome">Nome Completo</label>
+                      <input type="text" id="ass-pr-nome" placeholder="Ex: Dra. Camila Rocha" required />
+                    </div>
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="ass-pr-cred" checked /> Credenciado na Mesa
+                    </label>
+                    <button type="submit" class="btn btn-secondary btn-sm">Cadastrar Procurador</button>
+                  </form>
+                </div>
+
+                <div class="card">
+                  <div class="card-header">
+                    <h3>🏅 Novo Candidato Conselho</h3>
+                  </div>
+                  <form id="form-ass-candidato" onsubmit="submeterCadastroCandidatoConselho(event)" class="form-stack">
+                    <div class="form-group">
+                      <label for="ass-cand-id">ID Candidato</label>
+                      <input type="text" id="ass-cand-id" placeholder="Ex: CAND-04" required />
+                    </div>
+                    <div class="form-group">
+                      <label for="ass-cand-nome">Nome do Conselheiro</label>
+                      <input type="text" id="ass-cand-nome" placeholder="Ex: Eng. Roberto Pires" required />
+                    </div>
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="ass-cand-conflito" /> Possui Conflito de Interesse
+                    </label>
+                    <button type="submit" class="btn btn-secondary btn-sm">Cadastrar Candidato</button>
+                  </form>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid-2-col">
+            <div class="card">
+              <div class="card-header">
+                <h3>📜 Procurações Registradas &amp; Poder Consolidado</h3>
+              </div>
+              <div class="table-responsive" id="tabela-ass-procuracoes"></div>
+              <hr class="divider" />
+              <h4 class="subtable-title">👔 Procuradores e Poder de Voto Consolidado</h4>
+              <div class="table-responsive" id="tabela-ass-procuradores"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h3>💼 Quadro Societário (Acionistas) &amp; Candidatos</h3>
+              </div>
+              <div class="table-responsive" id="tabela-ass-acionistas"></div>
+              <hr class="divider" />
+              <h4 class="subtable-title">🏅 Candidatos ao Conselho de Administração</h4>
+              <div class="table-responsive" id="tabela-ass-candidatos"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===============================================================
+             ABA 5: CONGRESSO NACIONAL & TRAMITAÇÃO BICAMERAL
+             =============================================================== -->
+        <section class="tab-view" id="view-congresso">
+          <!-- Painel de Tramitação Legislativa Bicameral -->
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h3>⚖️ Fluxo de Tramitação Legislativa Bicameral (Câmara ⇄ Senado)</h3>
+                <p class="card-subtitle">
+                  PL e PLP exigem 1 turno por Casa; PEC exige 2 turnos de 3/5 em cada Casa antes de avançar à Casa Revisora
+                </p>
+              </div>
+            </div>
+            <div class="tramitacao-grid" id="lista-tramitacoes-congresso">
+              <!-- Preenchido via JS -->
+            </div>
+          </div>
+
+          <div class="grid-2-col">
+            <!-- Cadastrar Matéria Legislativa -->
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h3>📄 Protocolar Nova Matéria Legislativa (PL / PLP / PEC)</h3>
+                  <p class="card-subtitle">Inicia automaticamente o acompanhamento bicameral</p>
+                </div>
+              </div>
+              <form id="form-cong-materia" onsubmit="submeterCadastroMateria(event)" class="form-stack">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cong-mat-id">Identificador</label>
+                    <input type="text" id="cong-mat-id" placeholder="Ex: PEC-99/2026" required />
+                  </div>
+                  <div class="form-group">
+                    <label for="cong-mat-tipo">Espécie</label>
+                    <select id="cong-mat-tipo">
+                      <option value="PL">PL — Projeto de Lei Ordinária</option>
+                      <option value="PLP">PLP — Projeto de Lei Complementar</option>
+                      <option value="PEC">PEC — Proposta de Emenda à Constituição</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="cong-mat-titulo">Título da Proposição</label>
+                  <input type="text" id="cong-mat-titulo" placeholder="Ex: Marco Legal de Inteligência Artificial Aberta" required />
+                </div>
+                <div class="form-group">
+                  <label for="cong-mat-ementa">Ementa</label>
+                  <input type="text" id="cong-mat-ementa" placeholder="Ex: Dispõe sobre transparência algorítmica em sistemas públicos" required />
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cong-mat-casa">Casa Iniciadora</label>
+                    <select id="cong-mat-casa">
+                      <option value="CAMARA">Câmara dos Deputados</option>
+                      <option value="SENADO">Senado Federal</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label for="cong-mat-autor">Autor (Parlamentar)</label>
+                    <select id="cong-mat-autor" required></select>
+                  </div>
+                </div>
+                <button type="submit" class="btn btn-primary">Protocolar Matéria e Iniciar Tramitação</button>
+              </form>
+            </div>
+
+            <!-- Cadastrar Parlamentar -->
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h3>🏛️ Cadastrar Parlamentar (Deputado ou Senador)</h3>
+                  <p class="card-subtitle">Apenas parlamentares em exercício na respectiva Casa podem votar</p>
+                </div>
+              </div>
+              <form id="form-cong-parlamentar" onsubmit="submeterCadastroParlamentar(event)" class="form-stack">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cong-parl-id">ID Parlamentar</label>
+                    <input type="text" id="cong-parl-id" placeholder="Ex: DEP-009" required />
+                  </div>
+                  <div class="form-group">
+                    <label for="cong-parl-nome">Nome Parlamentar</label>
+                    <input type="text" id="cong-parl-nome" placeholder="Ex: Dep. Lucas Mendes" required />
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cong-parl-casa">Casa Legislativa</label>
+                    <select id="cong-parl-casa">
+                      <option value="CAMARA">Câmara dos Deputados</option>
+                      <option value="SENADO">Senado Federal</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label for="cong-parl-partido">Partido / UF</label>
+                    <div class="input-pair">
+                      <input type="text" id="cong-parl-partido" placeholder="Partido (Ex: PSB)" required />
+                      <input type="text" id="cong-parl-uf" placeholder="UF (SP)" maxlength="2" required />
+                    </div>
+                  </div>
+                </div>
+                <div class="checkbox-grid">
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="cong-parl-exercicio" checked /> Em Exercício
+                  </label>
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="cong-parl-licenciado" /> Licenciado
+                  </label>
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="cong-parl-suspenso" /> Mandato Suspenso
+                  </label>
+                </div>
+                <button type="submit" class="btn btn-primary">Cadastrar Parlamentar</button>
+              </form>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h3>🏛️ Parlamentares Cadastrados (Câmara e Senado)</h3>
+            </div>
+            <div class="table-responsive" id="tabela-cong-parlamentares"></div>
+          </div>
+        </section>
+
+        <!-- ===============================================================
+             ABA 6: AUDITORIA CRIPTOGRÁFICA SHA-256
+             =============================================================== -->
+        <section class="tab-view" id="view-auditoria">
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h3>🔐 Inspetor de Cadeia Criptográfica SHA-256 e Âncora de Encerramento</h3>
+                <p class="card-subtitle">
+                  Cada evento é encadeado ao hash anterior (Genesis = 64 zeros) com verificação independente de integridade
+                </p>
+              </div>
+              <div class="audit-session-picker">
+                <label for="auditoria-seletor-sessao">Sessão Auditada:</label>
+                <select id="auditoria-seletor-sessao" onchange="renderizarAbaAuditoria()"></select>
+              </div>
+            </div>
+
+            <div id="painel-auditoria-conteudo">
+              <!-- Preenchido via JS -->
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <!-- Barra de Navegação Inferior (Mobile / Celular) -->
+      <nav class="mobile-bottom-nav" aria-label="Navegação rápida mobile">
+        <button class="bottom-nav-item active" data-tab="dashboard" onclick="navegarPara('dashboard')">
+          <span>📊</span>
+          <small>Painel</small>
+        </button>
+        <button class="bottom-nav-item" data-tab="sessoes" onclick="navegarPara('sessoes')">
+          <span>🗳️</span>
+          <small>Urna</small>
+        </button>
+        <button class="bottom-nav-item" data-tab="ca" onclick="navegarPara('ca')">
+          <span>🎓</span>
+          <small>CA</small>
+        </button>
+        <button class="bottom-nav-item" data-tab="assembleia" onclick="navegarPara('assembleia')">
+          <span>🏢</span>
+          <small>Assembleia</small>
+        </button>
+        <button class="bottom-nav-item" data-tab="congresso" onclick="navegarPara('congresso')">
+          <span>🏛️</span>
+          <small>Congresso</small>
+        </button>
+        <button class="bottom-nav-item" data-tab="auditoria" onclick="navegarPara('auditoria')">
+          <span>🔐</span>
+          <small>Auditoria</small>
+        </button>
+      </nav>
+    </div>
+  </div>
+
+  <!-- Container de Notificações (Toasts) -->
+  <div class="toast-container" id="toast-container" aria-live="polite"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
+
