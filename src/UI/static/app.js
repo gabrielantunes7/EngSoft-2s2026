@@ -1569,6 +1569,11 @@ function renderizarAbaAuditoria() {
     <!-- Lista de Blocos da Cadeia -->
     <div class="card" style="margin-top: 1rem;">
       <h4>⛓️ Blocos Registrados na Cadeia de Custódia (Hash Chain)</h4>
+      ${
+        sessao.voto_secreto
+          ? `<p class="card-subtitle">🔒 Voto secreto: a opção e o horário de cada voto não são exibidos. Os hashes continuam verificáveis e o resultado aparece na apuração.</p>`
+          : `<p class="card-subtitle">📢 Votação aberta e nominal neste contexto: as opções registradas são públicas.</p>`
+      }
       <div class="hash-chain-list" style="margin-top: 0.75rem;">
         ${(audit.registros || [])
           .map(
@@ -1576,11 +1581,13 @@ function renderizarAbaAuditoria() {
           <div class="hash-chain-node">
             <div class="node-header">
               <span>Bloco #${r.indice}: ${r.evento}</span>
-              <small>${r.timestamp}</small>
+              <small>${r.timestamp || "🔒 horário sigiloso"}</small>
             </div>
             <div class="hash-row"><strong>Hash:</strong> ${r.hash}</div>
             <div class="hash-row"><strong>Hash Anterior:</strong> ${r.hash_anterior}</div>
-            <div class="hash-row"><strong>Dados:</strong> ${JSON.stringify(r.dados)}</div>
+            <div class="hash-row"><strong>Dados:</strong> ${
+              r.dados && r.dados.conteudo === "sigiloso" ? "🔒 conteúdo do voto sigiloso" : JSON.stringify(r.dados)
+            }</div>
           </div>
         `
           )
@@ -1605,9 +1612,13 @@ async function submeterVerificacaoProtocolo(event, idSessao) {
       box.className = "badge badge-success";
       box.style.padding = "0.75rem";
       box.style.borderRadius = "var(--radius-sm)";
+      const quando = res.registro.timestamp ? ` registrado em ${res.registro.timestamp}` : "";
+      const sigilo = res.registro.timestamp
+        ? ""
+        : "<br />O voto foi incluído na cadeia; por sigilo, a opção escolhida não é exibida.";
       box.innerHTML = `
         ✅ Protocolo Autêntico e Válido!<br />
-        Encontrado no Bloco #${res.registro.indice} (${res.registro.evento}) registrado em ${res.registro.timestamp}.
+        Encontrado no Bloco #${res.registro.indice} (${res.registro.evento})${quando}.${sigilo}
       `;
     } else {
       box.className = "badge badge-danger";

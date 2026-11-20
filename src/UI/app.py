@@ -6,7 +6,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from votacao.auditoria import LogDeAuditoria, ResumoEncerramento
+from votacao.auditoria import LogDeAuditoria, RegistroAuditoria, ResumoEncerramento, TipoEvento
 from votacao.dados.assembleia import Acionista, CandidatoConselho, Procurador
 from votacao.dados.ca import ChapaCA, Discente
 from votacao.dados.congresso import MateriaLegislativa, Parlamentar
@@ -24,6 +24,34 @@ from votacao.regras.congresso import RegraCongresso
 from votacao.servicos import ServicoElegibilidade
 from votacao.sessao import EstadoSessao, SessaoVotacao
 from votacao.tramitacao import TramitacaoLegislativa
+
+# Política de sigilo por contexto (descoberta D-AUD-04 da Atividade 3): a eleição de
+# CA é secreta; na assembleia o voto é aberto e nominal (Lei das S/A e CVM, história
+# #44) e no Congresso a votação é nominal. A UI só expõe votos individuais, opções em
+# registros de auditoria e parciais quando o contexto não exige sigilo.
+CONTEXTOS_VOTO_SECRETO = frozenset({"CA"})
+DADOS_VOTO_SIGILOSO: dict[str, Any] = {"conteudo": "sigiloso"}
+
+
+def voto_e_secreto(contexto: str) -> bool:
+    """Indica se o contexto exige voto secreto."""
+    return str(contexto).upper() in CONTEXTOS_VOTO_SECRETO
+
+
+def registro_de_voto_oculto(registro: RegistroAuditoria, secreto: bool) -> bool:
+    """Um registro de voto tem seu conteúdo e horário ocultos em contexto secreto."""
+    return secreto and registro.evento == TipoEvento.VOTO_REGISTRADO
+
+
+def dados_publicos_do_registro(registro: RegistroAuditoria, secreto: bool) -> dict[str, Any]:
+    """Dados do registro que podem ser exibidos, sem a opção de um voto secreto.
+
+    O log de auditoria guarda a opção (necessária para a cadeia de hash e a
+    recontagem); apenas a exibição é restringida.
+    """
+    if registro_de_voto_oculto(registro, secreto):
+        return dict(DADOS_VOTO_SIGILOSO)
+    return registro.dados
 
 
 class EstadoAplicacaoUI:
@@ -293,21 +321,30 @@ class EstadoAplicacaoUI:
         s = self.sessoes[id_sessao]
         meta = self.metadados_sessoes.get(id_sessao, {})
         contexto = meta.get("contexto", self._inferir_contexto_regra(s.regra))
+        secreto = voto_e_secreto(contexto)
 
-        votos_serializados = [
-            {
-                "eleitor_id": v.eleitor_id,
-                "opcao": v.opcao,
-                "peso": v.peso,
-                "timestamp": v.timestamp.isoformat() if v.timestamp else None,
-                "representados": list(v.representados),
-            }
-            for v in s.votos
-        ]
+        # Voto secreto: nenhum voto individual sai da sessão (nem eleitor, nem opção,
+        # nem horário) e não há parcial durante a votação, que permitiria ligar cada
+        # incremento a quem acabou de votar. O resultado só aparece após a apuração.
+        votos_serializados = (
+            []
+            if secreto
+            else [
+                {
+                    "eleitor_id": v.eleitor_id,
+                    "opcao": v.opcao,
+                    "peso": v.peso,
+                    "timestamp": v.timestamp.isoformat() if v.timestamp else None,
+                    "representados": list(v.representados),
+                }
+                for v in s.votos
+            ]
+        )
 
         contagem_parcial: dict[str, int] = {}
-        for v in s.votos:
-            contagem_parcial[v.opcao] = contagem_parcial.get(v.opcao, 0) + v.peso
+        if not secreto:
+            for v in s.votos:
+                contagem_parcial[v.opcao] = contagem_parcial.get(v.opcao, 0) + v.peso
 
         resultado_dict: dict[str, Any] | None = None
         if s.resultado is not None:
@@ -326,12 +363,13 @@ class EstadoAplicacaoUI:
                 "detalhes": dict(r.detalhes),
             }
 
-        auditoria_dict = self._serializar_auditoria(s)
+        auditoria_dict = self._serializar_auditoria(s, secreto=secreto)
 
         return {
             "id_sessao": s.id_sessao,
             "titulo": meta.get("titulo", s.id_sessao),
             "contexto": contexto,
+            "voto_secreto": secreto,
             "estado": s.estado.value,
             "total_aptos": s.total_aptos,
             "inicio_votacao": s.inicio_votacao.isoformat() if s.inicio_votacao else None,
@@ -347,7 +385,7 @@ class EstadoAplicacaoUI:
             "auditoria": auditoria_dict,
         }
 
-    def _serializar_auditoria(self, s: SessaoVotacao) -> dict[str, Any]:
+    def _serializar_auditoria(self, s: SessaoVotacao, secreto: bool = False) -> dict[str, Any]:
         log = s.log
         if log is None:
             return {
@@ -365,8 +403,11 @@ class EstadoAplicacaoUI:
                 "indice": r.indice,
                 "evento": r.evento.value,
                 "id_votacao": r.id_votacao,
-                "timestamp": r.timestamp.isoformat(),
-                "dados": r.dados,
+                # O horário exato de cada voto também liga voto a eleitor (D-AUD-03).
+                "timestamp": (
+                    None if registro_de_voto_oculto(r, secreto) else r.timestamp.isoformat()
+                ),
+                "dados": dados_publicos_do_registro(r, secreto),
                 "hash_anterior": r.hash_anterior,
                 "hash": r.hash,
             }
@@ -799,14 +840,20 @@ class EstadoAplicacaoUI:
             )
 
         protocolo = sessao.registrar_voto(voto)
-        return {
-            "protocolo": protocolo,
-            "voto": {
+        # O recibo de um voto secreto comprova a inclusão (protocolo), não o conteúdo.
+        voto_publico: dict[str, Any] = (
+            {"peso": voto.peso, "sigiloso": True}
+            if voto_e_secreto(contexto)
+            else {
                 "eleitor_id": voto.eleitor_id,
                 "opcao": voto.opcao,
                 "peso": voto.peso,
                 "representados": list(voto.representados),
-            },
+            }
+        )
+        return {
+            "protocolo": protocolo,
+            "voto": voto_publico,
             "sessao": self.serializar_sessao(id_sessao),
         }
 
@@ -942,15 +989,19 @@ class EstadoAplicacaoUI:
         if sessao.log is None:
             return {"encontrado": False, "id_sessao": id_sessao, "protocolo": prot_limpo}
 
+        meta = self.metadados_sessoes.get(id_sessao, {})
+        secreto = voto_e_secreto(meta.get("contexto", self._inferir_contexto_regra(sessao.regra)))
         encontrado = sessao.log.contem_protocolo(prot_limpo)
         registro_detalhe = None
         for r in sessao.log.registros:
             if r.hash == prot_limpo:
+                # Em voto secreto, conferir o protocolo prova a inclusão do voto, mas
+                # não pode revelar a opção: isso viabilizaria compra de voto e coação.
                 registro_detalhe = {
                     "indice": r.indice,
                     "evento": r.evento.value,
-                    "timestamp": r.timestamp.isoformat(),
-                    "dados": r.dados,
+                    "timestamp": None if secreto else r.timestamp.isoformat(),
+                    "dados": dados_publicos_do_registro(r, secreto),
                     "hash": r.hash,
                 }
                 break

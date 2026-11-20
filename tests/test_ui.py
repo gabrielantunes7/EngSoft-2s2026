@@ -172,6 +172,74 @@ class TestEstadoAplicacaoUI:
         assert apuracao["resultado"]["quorum_atingido"] is True
         assert apuracao["resultado"]["vencedor"] == "CHAPA RENOVA"
 
+    def test_sigilo_do_voto_no_ca(self) -> None:
+        # D-AUD-02/03/04 (Atividade 3): na eleição de CA nada do que a UI expõe pode
+        # ligar um eleitor à sua opção, nem durante nem depois da votação.
+        app = EstadoAplicacaoUI()
+        res = app.registrar_voto_na_sessao(
+            "ELEICAO-CA-2026", {"eleitor_id": "247314", "opcao": "Chapa Futuro"}
+        )
+
+        assert res["voto"] == {"peso": 1, "sigiloso": True}
+
+        sessao = app.serializar_sessao("ELEICAO-CA-2026")
+        assert sessao["voto_secreto"] is True
+        assert sessao["votos"] == []
+        assert sessao["contagem_parcial"] == {}
+        assert sessao["total_votos"] == 1
+
+        registros_voto = [
+            r for r in sessao["auditoria"]["registros"] if r["evento"] == "VOTO_REGISTRADO"
+        ]
+        assert registros_voto == [
+            {**registros_voto[0], "timestamp": None, "dados": {"conteudo": "sigiloso"}}
+        ]
+
+        verif = app.verificar_protocolo_auditoria("ELEICAO-CA-2026", res["protocolo"])
+        assert verif["encontrado"] is True
+        assert verif["registro"]["dados"] == {"conteudo": "sigiloso"}
+        assert verif["registro"]["timestamp"] is None
+
+        # Durante a votação, nenhuma resposta contém a opção votada nem o eleitor.
+        app.registrar_voto_na_sessao(
+            "ELEICAO-CA-2026", {"eleitor_id": "242352", "opcao": "Chapa Futuro"}
+        )
+        em_votacao = json.dumps(app.obter_estado_completo(), ensure_ascii=False)
+        assert "CHAPA FUTURO" not in em_votacao
+        assert "247314" not in json.dumps(app.serializar_sessao("ELEICAO-CA-2026"))
+
+        # Após a apuração só o resultado agregado é público; o eleitor segue oculto.
+        app.apurar_sessao("ELEICAO-CA-2026")
+        final = app.serializar_sessao("ELEICAO-CA-2026")
+        assert final["resultado"]["vencedor"] == "CHAPA FUTURO"
+        assert final["votos"] == []
+        assert "247314" not in json.dumps(final, ensure_ascii=False)
+        assert "242352" not in json.dumps(final, ensure_ascii=False)
+
+        # A ocultação é só de exibição: o log interno segue íntegro para recontagem.
+        sessao_dominio = app.sessoes["ELEICAO-CA-2026"]
+        assert sessao_dominio.log is not None
+        assert sessao_dominio.log.verificar_integridade().integro is True
+
+    def test_voto_aberto_e_nominal_na_assembleia(self) -> None:
+        # Na assembleia societária o voto é aberto (Lei das S/A, história #44).
+        app = EstadoAplicacaoUI()
+        res = app.registrar_voto_na_sessao(
+            "AGE-2026-01", {"eleitor_id": "AC-002", "opcao": "SIM", "modo": "DIRETO"}
+        )
+        assert res["voto"]["eleitor_id"] == "AC-002"
+        assert res["voto"]["opcao"] == "SIM"
+
+        sessao = app.serializar_sessao("AGE-2026-01")
+        assert sessao["voto_secreto"] is False
+        assert sessao["votos"][0]["eleitor_id"] == "AC-002"
+        assert "SIM" in sessao["contagem_parcial"]
+        registro = next(
+            r for r in sessao["auditoria"]["registros"] if r["evento"] == "VOTO_REGISTRADO"
+        )
+        assert registro["dados"]["opcao"] == "SIM"
+        assert registro["timestamp"] is not None
+
     def test_fluxo_voto_societario_com_procuracao(self) -> None:
         app = EstadoAplicacaoUI()
         app.criar_sessao(
