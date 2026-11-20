@@ -365,8 +365,11 @@ class TestEstadoAplicacaoUI:
                 {"eleitor_id": "AC-003", "opcao": "CONS-IMPEDIDO", "modo": "DIRETO"},
             )
 
-    def test_tramitacao_completa_pec_quatro_turnos_e_promulgacao(self) -> None:
-        """Verifica o ciclo completo da PEC (2 turnos na Câmara e 2 turnos no Senado)."""
+    def test_tramitacao_completa_pec_quatro_turnos_ate_aprovacao(self) -> None:
+        """Verifica o ciclo completo da PEC (2 turnos na Câmara e 2 turnos no Senado).
+
+        A tramitação termina em APROVADA: a etapa de promulgação ainda não existe (#34).
+        """
         app = EstadoAplicacaoUI()
 
         # Protocolar nova PEC
@@ -406,7 +409,7 @@ class TestEstadoAplicacaoUI:
         assert tram.casa_atual.value == "SENADO"
         assert tram.turno_atual == 2
 
-        # Turno 2 no Senado -> Aprovação final e promulgação da PEC!
+        # Turno 2 no Senado -> aprovação final da PEC
         res4 = app.convocar_sessao_tramitacao("PEC-77/2026", liberar_imediatamente=True)
         s4 = res4["sessao"]["id_sessao"]
         app.simular_votacao_plenario(s4, {"votos_sim": 52, "votos_nao": 12})
