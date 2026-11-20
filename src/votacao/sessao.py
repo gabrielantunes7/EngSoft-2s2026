@@ -21,11 +21,15 @@ SEPARADOR_PROCURACAO = "#rep:"
 
 
 class EstadoSessao(StrEnum):
-    """Etapas do ciclo de vida de uma sessão, na ordem em que ocorrem."""
+    """Etapas do ciclo de vida de uma sessão, na ordem em que ocorrem.
+
+    SUSPENSA é um desvio temporário a partir de EM_VOTACAO, que retorna a ela na retomada.
+    """
 
     CRIADA = "CRIADA"
     ABERTA = "ABERTA"
     EM_VOTACAO = "EM_VOTACAO"
+    SUSPENSA = "SUSPENSA"
     EM_APURACAO = "EM_APURACAO"
     ENCERRADA = "ENCERRADA"
 
@@ -46,9 +50,10 @@ class SessaoVotacao:
     """Sessão de votação controlada por uma máquina de estados e padrão Observer.
 
     A sessão percorre CRIADA → ABERTA → EM_VOTACAO → EM_APURACAO → ENCERRADA, sempre
-    nessa ordem e sem retorno. Votos só são aceitos em EM_VOTACAO, dentro da janela
-    de votação quando ela é definida, e no máximo um por eleitor. A apuração só
-    acontece depois que a urna foi fechada.
+    nessa ordem. A única volta permitida é a da suspensão: EM_VOTACAO → SUSPENSA →
+    EM_VOTACAO, quantas vezes for preciso, preservando os votos já colhidos. Votos só
+    são aceitos em EM_VOTACAO, dentro da janela de votação quando ela é definida, e no
+    máximo um por eleitor. A apuração só acontece depois que a urna foi fechada.
 
     A sessão atua como publicador (Subject) no padrão Observer: sempre que transita de
     estado ou admite um voto, notifica os observadores registrados (como o
@@ -136,6 +141,8 @@ class SessaoVotacao:
         self._eleitores: set[str] = set()
         self._votos: list[Voto] = []
         self._resultado: ResultadoApuracao | None = None
+        self._motivo_suspensao: str | None = None
+        self._total_suspensoes = 0
 
     @property
     def log(self) -> LogDeAuditoria | None:
@@ -204,6 +211,16 @@ class SessaoVotacao:
     def resultado(self) -> ResultadoApuracao | None:
         """Resultado da apuração, ou None enquanto a sessão não for apurada."""
         return self._resultado
+
+    @property
+    def motivo_suspensao(self) -> str | None:
+        """Motivo da suspensão em curso, ou None se a sessão não estiver suspensa."""
+        return self._motivo_suspensao
+
+    @property
+    def total_suspensoes(self) -> int:
+        """Quantas vezes a sessão já foi suspensa."""
+        return self._total_suspensoes
 
     @property
     def quorum_instalacao(self) -> int | None:
@@ -296,6 +313,59 @@ class SessaoVotacao:
             dados=dados,
         )
 
+    def suspender(self, motivo: str) -> None:
+        """Suspende a votação em curso (EM_VOTACAO → SUSPENSA), preservando os votos.
+
+        Sessões reais são interrompidas por queda de quórum, questão de ordem ou falta
+        de tempo regimental; suspender evita abandonar a sessão e convocar outra, o que
+        registraria como duas deliberações o que foi uma só (D-RITO-04).
+
+        Args:
+            motivo: Razão da suspensão, registrada no log de auditoria.
+
+        Raises:
+            ValueError: Se o motivo for vazio.
+            TransicaoInvalidaError: Se a sessão não estiver em EM_VOTACAO.
+        """
+        self._exigir_estado(EstadoSessao.EM_VOTACAO, operacao="suspender a votação")
+        motivo_limpo = motivo.strip()
+        if not motivo_limpo:
+            msg = "Informe o motivo da suspensão da sessão."
+            raise ValueError(msg)
+
+        self._transitar(
+            de=EstadoSessao.EM_VOTACAO,
+            para=EstadoSessao.SUSPENSA,
+            evento=TipoEvento.VOTACAO_SUSPENSA,
+            dados={"motivo": motivo_limpo, "total_votos": len(self._votos)},
+        )
+        self._motivo_suspensao = motivo_limpo
+        self._total_suspensoes += 1
+
+    def retomar(self) -> None:
+        """Retoma a votação suspensa (SUSPENSA → EM_VOTACAO).
+
+        Os votos colhidos antes da suspensão continuam valendo, e quem já votou segue
+        impedido de votar de novo. A janela de votação não é estendida. Se a sessão tem
+        quórum de instalação, ele é aferido de novo antes da retomada.
+
+        Raises:
+            TransicaoInvalidaError: Se a sessão não estiver suspensa.
+            QuorumInstalacaoError: Se houver quórum de instalação e os presentes não o
+                atingirem. A sessão permanece SUSPENSA.
+        """
+        self._exigir_estado(EstadoSessao.SUSPENSA, operacao="retomar a votação")
+        self._exigir_quorum_instalacao()
+
+        motivo = self._motivo_suspensao
+        self._transitar(
+            de=EstadoSessao.SUSPENSA,
+            para=EstadoSessao.EM_VOTACAO,
+            evento=TipoEvento.VOTACAO_RETOMADA,
+            dados={"motivo_da_suspensao": motivo, "total_votos": len(self._votos)},
+        )
+        self._motivo_suspensao = None
+
     def encerrar_votacao(self) -> None:
         """Fecha a urna (EM_VOTACAO → EM_APURACAO)."""
         self._transitar(
@@ -319,8 +389,14 @@ class SessaoVotacao:
             TransicaoInvalidaError: Se a sessão não estiver em EM_VOTACAO.
             VotoRecusadoError: Se o relógio estiver fora da janela de votação ou se o
                 eleitor — diretamente, por procurador ou representado em voto consolidado —
-                já tiver votado nesta sessão.
+                já tiver votado nesta sessão, ou se a sessão estiver suspensa.
         """
+        if self._estado == EstadoSessao.SUSPENSA:
+            msg = (
+                f"A sessão '{self.id_sessao}' está suspensa ({self._motivo_suspensao}). "
+                "Os votos já colhidos estão preservados; aguarde a retomada para votar."
+            )
+            raise VotoRecusadoError(msg)
         self._exigir_estado(EstadoSessao.EM_VOTACAO, operacao="registrar voto")
         self._exigir_dentro_da_janela()
 
