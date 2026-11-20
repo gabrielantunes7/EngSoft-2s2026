@@ -164,8 +164,10 @@ class TramitacaoLegislativa:
             relogio: Relógio injetável repassado à sessão.
 
         Returns:
-            Sessão em CRIADA, com `RegraCongresso` da matéria e da Casa corrente e
-            total de aptos igual ao número constitucional de membros da Casa.
+            Sessão em CRIADA, com `RegraCongresso` da matéria e da Casa corrente, total
+            de aptos igual ao número constitucional de membros da Casa e quórum de
+            instalação igual à maioria absoluta desses membros: a votação só é liberada
+            depois de registrada a presença desse número de parlamentares (CF, art. 47).
 
         Raises:
             TramitacaoInvalidaError: Se a tramitação já foi concluída.
@@ -173,12 +175,15 @@ class TramitacaoLegislativa:
         self._exigir_em_tramitacao(operacao="convocar sessão")
 
         fabrica = FabricaCongresso()
+        regra = fabrica.criar_regra(materia=self.tipo, casa=self._casa_atual)
         sessao = fabrica.criar_sessao(
             id_sessao=self.id_proxima_sessao,
             materia=self.tipo,
             casa=self._casa_atual,
             log=log,
             relogio=relogio,
+            regra=regra,
+            quorum_instalacao=regra.quorum_instalacao,
         )
         self._sessao_convocada = sessao
         return sessao

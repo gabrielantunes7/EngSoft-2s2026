@@ -284,11 +284,49 @@ class TestEstadoAplicacaoUI:
         )
         assert res_cons["voto"]["peso"] > 0
 
+    def test_registro_de_presenca_valida_parlamentar_e_casa(self) -> None:
+        # #37: só compõem o quórum parlamentares da Casa da sessão e em exercício.
+        app = EstadoAplicacaoUI()
+        id_sessao = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)[
+            "sessao"
+        ]["id_sessao"]
+
+        with pytest.raises(ValueError, match="SENADO"):
+            app.registrar_presenca_sessao(id_sessao, {"parlamentares": ["SEN-001"]})
+        with pytest.raises(ValueError, match="exercício"):
+            app.registrar_presenca_sessao(id_sessao, {"parlamentares": ["DEP-003"]})
+        with pytest.raises(KeyError, match="não encontrado"):
+            app.registrar_presenca_sessao(id_sessao, {"parlamentares": ["DEP-999"]})
+        with pytest.raises(ValueError, match="ultrapassaria os 513"):
+            app.registrar_presenca_sessao(id_sessao, {"bancada": 514})
+        with pytest.raises(ValueError, match="Informe ao menos"):
+            app.registrar_presenca_sessao(id_sessao, {})
+        with pytest.raises(ValueError, match="só se aplica a sessões do Congresso"):
+            app.registrar_presenca_sessao("ELEICAO-CA-2026", {"bancada": 10})
+
+        # Nenhuma tentativa inválida deixou presença registrada
+        assert app.serializar_sessao(id_sessao)["total_presentes"] == 0
+
+        sessao = app.registrar_presenca_sessao(
+            id_sessao, {"parlamentares": ["DEP-001", "DEP-002"], "bancada": 255}
+        )
+        assert sessao["total_presentes"] == 257
+        assert app.liberar_votacao_sessao(id_sessao)["estado"] == "EM_VOTACAO"
+
     def test_fluxo_tramitacao_e_sessao_congresso(self) -> None:
         app = EstadoAplicacaoUI()
         res_conv = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=True)
         id_sessao = res_conv["sessao"]["id_sessao"]
         assert "PL-101/2026" in id_sessao
+
+        # #37: sem presença, a votação não é liberada; a sessão fica ABERTA com aviso.
+        assert res_conv["sessao"]["estado"] == "ABERTA"
+        assert res_conv["sessao"]["quorum_instalacao"] == 257
+        assert "há 0 presentes e são exigidos 257" in res_conv["aviso"]
+
+        presenca = app.registrar_presenca_sessao(id_sessao, {"bancada": 320})
+        assert presenca["total_presentes"] == 320
+        assert app.liberar_votacao_sessao(id_sessao)["estado"] == "EM_VOTACAO"
 
         # Simulação de bancada no plenário
         sim = app.simular_votacao_plenario(
@@ -296,6 +334,8 @@ class TestEstadoAplicacaoUI:
             {"votos_sim": 260, "votos_nao": 50, "votos_abstencao": 5, "votos_branco": 0},
         )
         assert sim["votos_adicionados"] == 315
+        # Os votantes da bancada já estavam presentes: não são contados de novo.
+        assert sim["sessao"]["total_presentes"] == 320
 
         # Apuração avança a matéria na tramitação bicameral
         apur = app.apurar_sessao(id_sessao)
@@ -388,6 +428,8 @@ class TestEstadoAplicacaoUI:
         # Turno 1 na Câmara (exige 3/5 = 308 votos SIM)
         res1 = app.convocar_sessao_tramitacao("PEC-77/2026", liberar_imediatamente=True)
         s1 = res1["sessao"]["id_sessao"]
+        app.registrar_presenca_sessao(s1, {"bancada": 350})
+        app.liberar_votacao_sessao(s1)
         app.simular_votacao_plenario(s1, {"votos_sim": 310, "votos_nao": 40})
         app.apurar_sessao(s1)
         assert tram.turno_atual == 2
@@ -396,6 +438,8 @@ class TestEstadoAplicacaoUI:
         # Turno 2 na Câmara
         res2 = app.convocar_sessao_tramitacao("PEC-77/2026", liberar_imediatamente=True)
         s2 = res2["sessao"]["id_sessao"]
+        app.registrar_presenca_sessao(s2, {"bancada": 345})
+        app.liberar_votacao_sessao(s2)
         app.simular_votacao_plenario(s2, {"votos_sim": 315, "votos_nao": 30})
         app.apurar_sessao(s2)
         assert tram.casa_atual.value == "SENADO"
@@ -404,6 +448,8 @@ class TestEstadoAplicacaoUI:
         # Turno 1 no Senado (exige 3/5 = 49 votos SIM)
         res3 = app.convocar_sessao_tramitacao("PEC-77/2026", liberar_imediatamente=True)
         s3 = res3["sessao"]["id_sessao"]
+        app.registrar_presenca_sessao(s3, {"bancada": 65})
+        app.liberar_votacao_sessao(s3)
         app.simular_votacao_plenario(s3, {"votos_sim": 55, "votos_nao": 10})
         app.apurar_sessao(s3)
         assert tram.casa_atual.value == "SENADO"
@@ -412,6 +458,8 @@ class TestEstadoAplicacaoUI:
         # Turno 2 no Senado -> aprovação final da PEC
         res4 = app.convocar_sessao_tramitacao("PEC-77/2026", liberar_imediatamente=True)
         s4 = res4["sessao"]["id_sessao"]
+        app.registrar_presenca_sessao(s4, {"bancada": 64})
+        app.liberar_votacao_sessao(s4)
         app.simular_votacao_plenario(s4, {"votos_sim": 52, "votos_nao": 12})
         app.apurar_sessao(s4)
         assert tram.status.value == "APROVADA"
@@ -621,6 +669,22 @@ class TestServidorHTTP:
         )
         assert st_conv == 201
         id_sessao_tram = res_conv["sessao"]["id_sessao"]
+
+        # Sem quórum de presença a votação não abre (#37): 409 ao tentar liberar
+        st_lib, _ = self._post(base_url, f"/api/sessoes/{id_sessao_tram}/liberar", {})
+        assert st_lib == 409
+
+        # Registrar presença via POST: parlamentar cadastrado da Casa + bancada
+        st_pres, res_pres = self._post(
+            base_url,
+            f"/api/sessoes/{id_sessao_tram}/presenca",
+            {"parlamentares": ["DEP-001"], "bancada": 300},
+        )
+        assert st_pres == 200
+        assert res_pres["total_presentes"] == 301
+        st_lib, res_lib = self._post(base_url, f"/api/sessoes/{id_sessao_tram}/liberar", {})
+        assert st_lib == 200
+        assert res_lib["estado"] == "EM_VOTACAO"
 
         # Simular bancada via POST
         st_sim, res_sim = self._post(

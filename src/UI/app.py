@@ -22,7 +22,7 @@ from votacao.regras.assembleia import RegraAssembleia
 from votacao.regras.ca import RegraCA
 from votacao.regras.congresso import RegraCongresso
 from votacao.servicos import ServicoElegibilidade
-from votacao.sessao import EstadoSessao, SessaoVotacao
+from votacao.sessao import EstadoSessao, QuorumInstalacaoError, SessaoVotacao
 from votacao.tramitacao import TramitacaoLegislativa
 
 # Política de sigilo por contexto (descoberta D-AUD-04 da Atividade 3): a eleição de
@@ -372,6 +372,8 @@ class EstadoAplicacaoUI:
             "voto_secreto": secreto,
             "estado": s.estado.value,
             "total_aptos": s.total_aptos,
+            "quorum_instalacao": s.quorum_instalacao,
+            "total_presentes": s.total_presentes,
             "inicio_votacao": s.inicio_votacao.isoformat() if s.inicio_votacao else None,
             "fim_votacao": s.fim_votacao.isoformat() if s.fim_votacao else None,
             "total_votos": len(s.votos),
@@ -734,11 +736,15 @@ class EstadoAplicacaoUI:
         elif ctx == "CONGRESSO":
             casa_enum = CasaLegislativa(casa.strip().upper())
             materia_enum = self._converter_tipo_materia(materia)
-            sessao = FabricaCongresso().criar_sessao(
+            fabrica_congresso = FabricaCongresso()
+            regra_congresso = fabrica_congresso.criar_regra(materia=materia_enum, casa=casa_enum)
+            sessao = fabrica_congresso.criar_sessao(
                 id_sessao=id_limpo,
                 materia=materia_enum,
                 casa=casa_enum,
                 log=log,
+                regra=regra_congresso,
+                quorum_instalacao=regra_congresso.quorum_instalacao,
             )
             meta = {
                 "contexto": "CONGRESSO",
@@ -753,12 +759,75 @@ class EstadoAplicacaoUI:
 
         if abrir_imediatamente or liberar_imediatamente:
             sessao.abrir()
-        if liberar_imediatamente:
-            sessao.liberar_votacao()
+        aviso = self._liberar_se_houver_quorum(sessao) if liberar_imediatamente else None
 
         self.sessoes[id_limpo] = sessao
         self.metadados_sessoes[id_limpo] = meta
-        return self.serializar_sessao(id_limpo)
+        resposta = self.serializar_sessao(id_limpo)
+        if aviso:
+            resposta["aviso"] = aviso
+        return resposta
+
+    @staticmethod
+    def _liberar_se_houver_quorum(sessao: SessaoVotacao) -> str | None:
+        """Libera a votação; sem quórum de presença, mantém a sessão ABERTA e avisa."""
+        try:
+            sessao.liberar_votacao()
+        except QuorumInstalacaoError as exc:
+            return f"{exc} Registre a presença dos parlamentares e libere a votação."
+        return None
+
+    def registrar_presenca_sessao(self, id_sessao: str, dados: dict[str, Any]) -> dict[str, Any]:
+        """Registra presentes numa sessão: parlamentares cadastrados e/ou bancada em lote.
+
+        `parlamentares` são identificadores do cadastro, que precisam pertencer à Casa da
+        sessão e estar em exercício. `bancada` simula a presença de N parlamentares
+        genéricos, com os mesmos identificadores usados pela simulação de votos, para
+        que quem estiver presente e votar não seja contado duas vezes.
+        """
+        sessao = self._obter_sessao(id_sessao)
+        if not isinstance(sessao.regra, RegraCongresso):
+            msg = "O registro de presença só se aplica a sessões do Congresso."
+            raise ValueError(msg)
+
+        ids: list[str] = []
+        for bruto in dados.get("parlamentares") or []:
+            pid = str(bruto).strip()
+            parlamentar = self.banco.congresso.obter_parlamentar(pid)
+            if parlamentar is None:
+                msg = f"Parlamentar '{pid}' não encontrado no cadastro."
+                raise KeyError(msg)
+            if parlamentar.casa != sessao.regra.casa:
+                msg = (
+                    f"{parlamentar.nome} é da {parlamentar.casa.value} e não pode compor o "
+                    f"quórum de uma sessão da {sessao.regra.casa.value}."
+                )
+                raise ValueError(msg)
+            if not parlamentar.em_exercicio or parlamentar.licenciado or parlamentar.suspenso:
+                msg = f"{parlamentar.nome} não está no exercício do mandato."
+                raise ValueError(msg)
+            ids.append(parlamentar.id)
+
+        bancada = int(dados.get("bancada") or 0)
+        if bancada < 0:
+            msg = "A quantidade de presentes da bancada não pode ser negativa."
+            raise ValueError(msg)
+        prefixo = sessao.regra.casa.value[:3]
+        ids.extend(f"{prefixo}-BANCADA-{seq:03d}" for seq in range(1, bancada + 1))
+
+        if not ids:
+            msg = "Informe ao menos um parlamentar ou a quantidade de presentes da bancada."
+            raise ValueError(msg)
+        novos = set(ids) - sessao.presentes
+        if sessao.total_presentes + len(novos) > sessao.regra.total_membros:
+            msg = (
+                f"A presença ({sessao.total_presentes + len(novos)}) ultrapassaria os "
+                f"{sessao.regra.total_membros} membros da {sessao.regra.casa.value}."
+            )
+            raise ValueError(msg)
+
+        sessao.registrar_presenca(*ids)
+        return self.serializar_sessao(id_sessao)
 
     def abrir_sessao(self, id_sessao: str) -> dict[str, Any]:
         sessao = self._obter_sessao(id_sessao)
@@ -953,9 +1022,10 @@ class EstadoAplicacaoUI:
         sessao = tram.nova_sessao(log=log)
         chave_mapa = id_sessao
 
+        aviso: str | None = None
         if liberar_imediatamente:
             sessao.abrir()
-            sessao.liberar_votacao()
+            aviso = self._liberar_se_houver_quorum(sessao)
 
         materia_obj = self.banco.congresso.obter_materia(id_limpo)
         titulo_materia = materia_obj.titulo if materia_obj else id_limpo
@@ -971,10 +1041,13 @@ class EstadoAplicacaoUI:
             "materia_id": id_limpo,
             "tramitacao_materia_id": id_limpo,
         }
-        return {
+        resposta: dict[str, Any] = {
             "tramitacao": self._serializar_tramitacao(tram),
             "sessao": self.serializar_sessao(chave_mapa),
         }
+        if aviso:
+            resposta["aviso"] = aviso
+        return resposta
 
     # =========================================================================
     # AUDITORIA E CONSULTA DE APTIDÃO

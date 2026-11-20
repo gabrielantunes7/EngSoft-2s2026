@@ -63,8 +63,13 @@ class FabricaCongresso(FabricaContextoVotacao):
         observadores: Sequence[ObservadorSessao] | None = None,
         relogio: Callable[[], datetime] | None = None,
         regra: RegraCongresso | None = None,
+        quorum_instalacao: int | None = None,
     ) -> SessaoVotacao:
-        """Cria uma SessaoVotacao com RegraCongresso associada."""
+        """Cria uma SessaoVotacao com RegraCongresso associada.
+
+        `quorum_instalacao` é repassado à sessão: quando informado, a votação só é
+        liberada com esse número de presentes. None mantém a aferição só na apuração.
+        """
         if regra is None:
             regra = self.criar_regra(materia=materia, casa=casa)
         aptos = total_aptos if total_aptos > 0 else regra.total_membros
@@ -74,6 +79,7 @@ class FabricaCongresso(FabricaContextoVotacao):
             "total_aptos": aptos,
             "log": log,
             "relogio": relogio,
+            "quorum_instalacao": quorum_instalacao,
         }
         if observadores is not None:
             kwargs_sessao["observadores"] = observadores

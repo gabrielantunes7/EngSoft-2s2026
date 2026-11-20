@@ -216,6 +216,8 @@ class ManipuladorRequisicoesUI(BaseHTTPRequestHandler):
                     )
                 if acao == "votar":
                     return HTTPStatus.OK, self.app.registrar_voto_na_sessao(id_sessao, corpo)
+                if acao == "presenca":
+                    return HTTPStatus.OK, self.app.registrar_presenca_sessao(id_sessao, corpo)
                 if acao == "simular-plenario":
                     return HTTPStatus.OK, self.app.simular_votacao_plenario(id_sessao, corpo)
                 if acao == "encerrar":

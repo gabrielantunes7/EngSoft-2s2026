@@ -124,6 +124,10 @@ Decisões e padrões principais:
 - **Autorização separada da condução.** "Esta pessoa pode votar, e com que peso?"
   (`ServicoElegibilidade`) é respondido fora da sessão; a sessão só controla o estado da
   urna e o voto duplo.
+- **Quórum de instalação aferido na abertura (Congresso).** A presença é registrada à
+  parte do voto, e a votação só é liberada com a maioria absoluta da Casa presente
+  (CF, art. 47). Na apuração, a regra ainda exige o mínimo de votos registrados,
+  inclusive abstenções.
 - **Sigilo por contexto na interface.** No CA, a UI não expõe votos individuais, parciais,
   nem a opção ou o horário dos registros de voto; na Assembleia e no Congresso, o voto é
   aberto e nominal.
@@ -204,8 +208,7 @@ O fluxo completo está em [CONTRIBUTING.md](CONTRIBUTING.md).
   interface, e o embaralhamento das cédulas no próprio log está no backlog (#28).
 - A tramitação conclui a matéria como aprovada ou rejeitada; emenda pela Casa revisora,
   promulgação, sanção e veto estão no backlog (#33, #34).
-- O quórum é aferido na apuração, e não na abertura da sessão; suspensão e anulação de
-  sessão não estão implementadas (#37, #38, #39).
+- Suspensão, retomada e anulação de sessão não estão implementadas (#38, #39).
 
 ## Membros da equipe
 
