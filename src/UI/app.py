@@ -1152,6 +1152,11 @@ class EstadoAplicacaoUI:
         meta = self.metadados_sessoes.get(id_sessao, {})
         secreto = voto_e_secreto(meta.get("contexto", self._inferir_contexto_regra(sessao.regra)))
         encontrado = sessao.log.contem_protocolo(prot_limpo)
+        # #28: a consulta do eleitor confere o protocolo contra a âncora do encerramento
+        # e responde em linguagem simples, sem opção, peso nem horário do voto.
+        consulta = sessao.log.consultar_comprovante(
+            prot_limpo, ancora=self.ancoras_emitidas.get(id_sessao)
+        )
         registro_detalhe = None
         for r in sessao.log.registros:
             if r.hash == prot_limpo:
@@ -1170,6 +1175,10 @@ class EstadoAplicacaoUI:
             "id_sessao": id_sessao,
             "protocolo": prot_limpo,
             "registro": registro_detalhe,
+            "situacao": consulta.situacao.value,
+            "incluido": consulta.incluido,
+            "mensagem": consulta.mensagem,
+            "instrucao": consulta.instrucao,
         }
 
     def consultar_aptidao_ui(self, dados: dict[str, Any]) -> dict[str, Any]:

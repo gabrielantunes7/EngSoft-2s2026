@@ -222,6 +222,37 @@ class TestEstadoAplicacaoUI:
         assert sessao_dominio.log is not None
         assert sessao_dominio.log.verificar_integridade().integro is True
 
+    def test_consulta_do_comprovante_pela_interface(self) -> None:
+        # #28: urna aberta -> registrado; encerrada e ancorada -> incluído; sem a opção.
+        app = EstadoAplicacaoUI()
+        protocolos = [
+            app.registrar_voto_na_sessao(
+                "ELEICAO-CA-2026", {"eleitor_id": ra, "opcao": "Chapa Futuro"}
+            )["protocolo"]
+            for ra in ("247314", "242352")
+        ]
+
+        aberta = app.verificar_protocolo_auditoria("ELEICAO-CA-2026", protocolos[0])
+        assert aberta["situacao"] == "REGISTRADO_URNA_ABERTA"
+
+        app.encerrar_votacao_sessao("ELEICAO-CA-2026")
+        encerrada = app.verificar_protocolo_auditoria("ELEICAO-CA-2026", protocolos[0])
+        assert encerrada["situacao"] == "INCLUIDO"
+        assert encerrada["incluido"] is True
+        assert "não mostra em quem você votou" in encerrada["instrucao"]
+        assert "CHAPA FUTURO" not in json.dumps(encerrada, ensure_ascii=False).upper()
+
+        inexistente = app.verificar_protocolo_auditoria("ELEICAO-CA-2026", "0" * 64)
+        assert inexistente["situacao"] == "NAO_ENCONTRADO"
+
+        # As cédulas embaralhadas ficam públicas no encerramento, sem o eleitor
+        encerramento = app.serializar_sessao("ELEICAO-CA-2026")["auditoria"]["registros"][-1]
+        assert encerramento["evento"] == "VOTACAO_ENCERRADA"
+        assert sorted(encerramento["dados"]["cedulas"]) == [
+            ["CHAPA FUTURO", 1],
+            ["CHAPA FUTURO", 1],
+        ]
+
     def test_voto_aberto_e_nominal_na_assembleia(self) -> None:
         # Na assembleia societária o voto é aberto (Lei das S/A, história #44).
         app = EstadoAplicacaoUI()
@@ -238,7 +269,9 @@ class TestEstadoAplicacaoUI:
         registro = next(
             r for r in sessao["auditoria"]["registros"] if r["evento"] == "VOTO_REGISTRADO"
         )
-        assert registro["dados"]["opcao"] == "SIM"
+        # #28: o log guarda a inclusão do voto sem o conteúdo, em todos os contextos; o
+        # mapa nominal vem da sessão. O registro nominal no próprio log é a história #44.
+        assert registro["dados"] == {}
         assert registro["timestamp"] is not None
 
     def test_fluxo_voto_societario_com_procuracao(self) -> None:
