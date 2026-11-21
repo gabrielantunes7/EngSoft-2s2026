@@ -14,6 +14,7 @@ import pytest
 from UI.app import EstadoAplicacaoUI
 from UI.servidor import criar_servidor
 from votacao.sessao import EstadoSessao, VotoRecusadoError
+from votacao.tramitacao import TramitacaoInvalidaError
 
 
 class TestEstadoAplicacaoUI:
@@ -400,13 +401,55 @@ class TestEstadoAplicacaoUI:
         app.apurar_sessao(id_emendas)
 
         tram = app._serializar_tramitacao(app.tramitacoes["PL-101/2026"])
-        assert tram["status"] == "APROVADA"
+        assert tram["status"] == "ENVIADA_A_SANCAO"  # #34: a lei segue para a sanção
         assert tram["texto_prevalecente"] == "INICIADORA"
         assert [e["evento"] for e in tram["log_rito"]] == [
             "TRAMITACAO_CASA_ALTERADA",
             "TRAMITACAO_CASA_ALTERADA",
-            "TRAMITACAO_CONCLUIDA",
+            "TRAMITACAO_ENVIADA_A_SANCAO",
         ]
+
+    def test_sancao_e_veto_pela_interface(self) -> None:
+        # #34: a lei aprovada vai à sanção; o veto é apreciado em cada Casa.
+        app = EstadoAplicacaoUI()
+        self._turno_aprovado(app, "PL-101/2026")
+        self._turno_aprovado(app, "PL-101/2026")
+        tram = app._serializar_tramitacao(app.tramitacoes["PL-101/2026"])
+        assert tram["status"] == "ENVIADA_A_SANCAO"
+        assert tram["concluida"] is False
+        assert tram["em_deliberacao"] is False
+
+        with pytest.raises(ValueError, match="razões do veto"):
+            app.vetar_tramitacao("PL-101/2026", "")
+        tram = app.vetar_tramitacao("PL-101/2026", "Vício de iniciativa")
+        assert tram["status"] == "VETO_EM_APRECIACAO"
+        assert tram["id_proxima_sessao"] == "PL-101/2026-VETO-CAMARA"
+        assert tram["em_deliberacao"] is True
+
+        conv = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)
+        assert "Apreciação do veto" in app.metadados_sessoes[conv["sessao"]["id_sessao"]]["titulo"]
+        # Derrubada exige maioria absoluta: 257 na Câmara e 41 no Senado
+        for _casa in ("CAMARA", "SENADO"):
+            sessao = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)[
+                "sessao"
+            ]
+            id_sessao = sessao["id_sessao"]
+            app.registrar_presenca_sessao(id_sessao, {"bancada": sessao["quorum_instalacao"]})
+            app.liberar_votacao_sessao(id_sessao)
+            app.simular_votacao_plenario(id_sessao, {"votos_sim": sessao["quorum_instalacao"]})
+            app.apurar_sessao(id_sessao)
+
+        tram = app._serializar_tramitacao(app.tramitacoes["PL-101/2026"])
+        assert tram["status"] == "APROVADA"
+        assert tram["concluida"] is True
+        assert tram["log_rito"][-1]["dados"]["decisao"] == "VETO_DERRUBADO"
+
+    def test_sancao_de_materia_em_tramitacao_e_recusada(self) -> None:
+        app = EstadoAplicacaoUI()
+        with pytest.raises(TramitacaoInvalidaError, match="aprovada nas duas Casas"):
+            app.sancionar_tramitacao("PL-101/2026")
+        with pytest.raises(KeyError, match="não encontrada"):
+            app.sancionar_tramitacao("PL-999/2026")
 
     def test_emenda_fora_da_revisora_e_recusada_antes_da_apuracao(self) -> None:
         app = EstadoAplicacaoUI()
@@ -545,10 +588,11 @@ class TestEstadoAplicacaoUI:
                 {"eleitor_id": "AC-003", "opcao": "CONS-IMPEDIDO", "modo": "DIRETO"},
             )
 
-    def test_tramitacao_completa_pec_quatro_turnos_ate_aprovacao(self) -> None:
+    def test_tramitacao_completa_pec_quatro_turnos_e_promulgacao(self) -> None:
         """Verifica o ciclo completo da PEC (2 turnos na Câmara e 2 turnos no Senado).
 
-        A tramitação termina em APROVADA: a etapa de promulgação ainda não existe (#34).
+        Aprovada nas duas Casas, a PEC é promulgada pelas Mesas, sem sanção
+        (CF, art. 60, § 3º; #34).
         """
         app = EstadoAplicacaoUI()
 
@@ -595,14 +639,14 @@ class TestEstadoAplicacaoUI:
         assert tram.casa_atual.value == "SENADO"
         assert tram.turno_atual == 2
 
-        # Turno 2 no Senado -> aprovação final da PEC
+        # Turno 2 no Senado -> aprovação final e promulgação da PEC
         res4 = app.convocar_sessao_tramitacao("PEC-77/2026", liberar_imediatamente=True)
         s4 = res4["sessao"]["id_sessao"]
         app.registrar_presenca_sessao(s4, {"bancada": 64})
         app.liberar_votacao_sessao(s4)
         app.simular_votacao_plenario(s4, {"votos_sim": 52, "votos_nao": 12})
         app.apurar_sessao(s4)
-        assert tram.status.value == "APROVADA"
+        assert tram.status.value == "PROMULGADA"
 
     def test_auditoria_completa_e_ancora_encerramento(self) -> None:
         """Verifica a integridade da cadeia de blocos SHA-256 e a âncora de fechamento."""
@@ -834,6 +878,12 @@ class TestServidorHTTP:
         )
         assert st_sim == 200
         assert res_sim["votos_adicionados"] == 290
+
+        # #34 pela API: sancionar matéria ainda em tramitação é 409; inexistente é 404
+        st_sanc, _ = self._post(base_url, "/api/tramitacoes/PL-888%2F2026/sancionar", {})
+        assert st_sanc == 409
+        st_inex, _ = self._post(base_url, "/api/tramitacoes/PL-000%2F2026/vetar", {"razoes": "x"})
+        assert st_inex == 404
 
         # Endpoint POST inexistente -> 404
         st_404, res_404 = self._post(base_url, "/api/nao-existe", {})
