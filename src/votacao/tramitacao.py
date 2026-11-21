@@ -19,11 +19,27 @@ from votacao.sessao import EstadoSessao, SessaoVotacao
 
 
 class StatusTramitacao(StrEnum):
-    """Situação de uma matéria ao longo do rito legislativo."""
+    """Situação de uma matéria ao longo do rito legislativo.
+
+    EM_TRAMITACAO, ENVIADA_A_SANCAO e VETO_EM_APRECIACAO são situações intermediárias;
+    APROVADA, PROMULGADA e REJEITADA são desfechos finais.
+    """
 
     EM_TRAMITACAO = "EM_TRAMITACAO"
+    ENVIADA_A_SANCAO = "ENVIADA_A_SANCAO"
+    VETO_EM_APRECIACAO = "VETO_EM_APRECIACAO"
     APROVADA = "APROVADA"
+    PROMULGADA = "PROMULGADA"
     REJEITADA = "REJEITADA"
+
+    @property
+    def concluida(self) -> bool:
+        """Se a situação é um desfecho final da tramitação."""
+        return self in (
+            StatusTramitacao.APROVADA,
+            StatusTramitacao.PROMULGADA,
+            StatusTramitacao.REJEITADA,
+        )
 
 
 class FaseTramitacao(StrEnum):
@@ -32,6 +48,7 @@ class FaseTramitacao(StrEnum):
     CASA_INICIADORA = "CASA_INICIADORA"
     CASA_REVISORA = "CASA_REVISORA"
     APRECIACAO_EMENDAS = "APRECIACAO_EMENDAS"
+    APRECIACAO_VETO = "APRECIACAO_VETO"
 
 
 class TextoPrevalecente(StrEnum):
@@ -84,6 +101,13 @@ class TramitacaoLegislativa:
     aprecia apenas as emendas (CF, art. 65, parágrafo único). A apreciação é terminal:
     acolhidas as emendas prevalece o texto da revisora; rejeitadas, o da iniciadora. Nos
     dois casos a matéria está aprovada, e não há novo envio à revisora.
+
+    A conclusão depende do tipo da matéria. A PEC aprovada nas duas Casas é promulgada
+    pelas Mesas, sem sanção (CF, art. 60, § 3º). O projeto de lei vai à sanção
+    presidencial (art. 66): sancionado, está aprovado; vetado, o veto é apreciado e só é
+    derrubado pela maioria absoluta dos Deputados e Senadores (art. 66, § 4º), em
+    votação aberta desde a EC 76/2013. Derrubado o veto, a matéria está aprovada; mantido,
+    rejeitada.
 
     Quando recebe um `RepositorioCongresso`, mantém a `MateriaLegislativa` cadastrada
     coerente com o rito: `casa_atual` acompanha a Casa em que a matéria se encontra e
@@ -149,6 +173,7 @@ class TramitacaoLegislativa:
         self._fase = FaseTramitacao.CASA_INICIADORA
         self._revisora_emendou = False
         self._texto_prevalecente: TextoPrevalecente | None = None
+        self._razoes_veto: str | None = None
         self.log = log
 
         if repo is not None:
@@ -171,6 +196,11 @@ class TramitacaoLegislativa:
             self._status == StatusTramitacao.EM_TRAMITACAO
             and self._fase == FaseTramitacao.CASA_REVISORA
         )
+
+    @property
+    def razoes_veto(self) -> str | None:
+        """Razões do veto presidencial, ou None se a matéria não foi vetada."""
+        return self._razoes_veto
 
     @property
     def texto_prevalecente(self) -> TextoPrevalecente | None:
@@ -213,6 +243,8 @@ class TramitacaoLegislativa:
         """
         if self._fase == FaseTramitacao.APRECIACAO_EMENDAS:
             return f"{self.materia_id}-{self._casa_atual.value}-EMENDAS"
+        if self._fase == FaseTramitacao.APRECIACAO_VETO:
+            return f"{self.materia_id}-VETO-{self._casa_atual.value}"
         return f"{self.materia_id}-{self._casa_atual.value}-T{self._turno_atual}"
 
     def nova_sessao(
@@ -236,13 +268,20 @@ class TramitacaoLegislativa:
         Raises:
             TramitacaoInvalidaError: Se a tramitação já foi concluída.
         """
-        self._exigir_em_tramitacao(operacao="convocar sessão")
+        self._exigir_deliberacao_aberta(operacao="convocar sessão")
 
         fabrica = FabricaCongresso()
-        regra = fabrica.criar_regra(materia=self.tipo, casa=self._casa_atual)
+        # A derrubada do veto exige maioria absoluta dos membros de cada Casa
+        # (art. 66, § 4º): o mesmo patamar da lei complementar (257 e 41 votos SIM).
+        materia_da_regra = (
+            TipoMateriaCongresso.LEI_COMPLEMENTAR
+            if self._fase == FaseTramitacao.APRECIACAO_VETO
+            else self.tipo
+        )
+        regra = fabrica.criar_regra(materia=materia_da_regra, casa=self._casa_atual)
         sessao = fabrica.criar_sessao(
             id_sessao=self.id_proxima_sessao,
-            materia=self.tipo,
+            materia=materia_da_regra,
             casa=self._casa_atual,
             log=log,
             relogio=relogio,
@@ -284,7 +323,7 @@ class TramitacaoLegislativa:
                 registrada, se foi anulada, se ainda não foi apurada, ou se houver
                 emenda fora da Casa revisora ou em sessão que não aprovou a matéria.
         """
-        self._exigir_em_tramitacao(operacao="registrar resultado")
+        self._exigir_deliberacao_aberta(operacao="registrar resultado")
 
         if sessao is not self._sessao_convocada:
             msg = (
@@ -336,10 +375,13 @@ class TramitacaoLegislativa:
 
         if not valida:
             return self._status
+        if fase == FaseTramitacao.APRECIACAO_VETO:
+            self._registrar_apreciacao_do_veto(resultado)
+            return self._status
         if texto is not None:
             # Apreciação de emendas é terminal: os dois desfechos aprovam a matéria.
             self._texto_prevalecente = texto
-            self._concluir(StatusTramitacao.APROVADA)
+            self._concluir_aprovacao_no_congresso()
             return self._status
         if resultado.status == StatusResultado.REJEITADO:
             self._concluir(StatusTramitacao.REJEITADA)
@@ -374,7 +416,102 @@ class TramitacaoLegislativa:
         elif self._revisora_emendou:
             self._retornar_para_apreciar_emendas()
         else:
-            self._concluir(StatusTramitacao.APROVADA)
+            self._concluir_aprovacao_no_congresso()
+
+    def _concluir_aprovacao_no_congresso(self) -> None:
+        """Encerra a fase legislativa: promulgação da PEC ou envio da lei à sanção.
+
+        A PEC é promulgada pelas Mesas da Câmara e do Senado, com o respectivo número de
+        ordem, e não vai à sanção (CF, art. 60, § 3º). O projeto de lei aprovado é
+        enviado ao Presidente da República para sanção ou veto (art. 66).
+        """
+        if self.tipo == TipoMateriaCongresso.PEC:
+            self._concluir(StatusTramitacao.PROMULGADA)
+            return
+        self._status = StatusTramitacao.ENVIADA_A_SANCAO
+        self._sincronizar_cadastro(ativa=False)
+        dados: dict[str, str] = {"casa": self._casa_atual.value}
+        if self._texto_prevalecente is not None:
+            dados["texto_prevalecente"] = self._texto_prevalecente.value
+        self._registrar_no_log(TipoEvento.TRAMITACAO_ENVIADA_A_SANCAO, dados)
+
+    def sancionar(self) -> StatusTramitacao:
+        """Registra a sanção presidencial, que conclui a tramitação como aprovada (art. 66).
+
+        Raises:
+            TramitacaoInvalidaError: Se a matéria não estiver aguardando sanção, o que
+                inclui a PEC (que não vai a sanção) e a matéria que ainda não venceu as
+                duas Casas.
+        """
+        self._exigir_aguardando_sancao(operacao="sancionar")
+        self._concluir(StatusTramitacao.APROVADA, decisao="SANCAO")
+        return self._status
+
+    def vetar(self, razoes: str) -> StatusTramitacao:
+        """Registra o veto presidencial e abre a sua apreciação pelo Congresso.
+
+        "O veto será apreciado em sessão conjunta (...) só podendo ser rejeitado pelo voto
+        da maioria absoluta dos Deputados e Senadores" (CF, art. 66, § 4º). A apreciação
+        é apurada separadamente em cada Casa, Câmara e depois Senado; votar SIM é votar
+        pela derrubada. Desde a EC 76/2013 a votação é aberta.
+
+        Args:
+            razoes: Razões do veto comunicadas ao Presidente do Senado (art. 66, § 1º).
+
+        Raises:
+            ValueError: Se as razões forem vazias.
+            TramitacaoInvalidaError: Se a matéria não estiver aguardando sanção.
+        """
+        self._exigir_aguardando_sancao(operacao="vetar")
+        razoes_limpas = razoes.strip()
+        if not razoes_limpas:
+            msg = "Informe as razões do veto (CF, art. 66, § 1º)."
+            raise ValueError(msg)
+
+        self._razoes_veto = razoes_limpas
+        self._status = StatusTramitacao.VETO_EM_APRECIACAO
+        self._fase = FaseTramitacao.APRECIACAO_VETO
+        self._casa_atual = CasaLegislativa.CAMARA
+        self._turno_atual = 1
+        self._sincronizar_cadastro(casa_atual=self._casa_atual, ativa=True)
+        self._registrar_no_log(
+            TipoEvento.TRAMITACAO_VETO,
+            {
+                "decisao": "VETO",
+                "razoes": razoes_limpas,
+                "votacao": "aberta (CF, art. 66, § 4º, redação da EC 76/2013)",
+            },
+        )
+        return self._status
+
+    def _registrar_apreciacao_do_veto(self, resultado: ResultadoApuracao) -> None:
+        """Maioria absoluta pela derrubada em cada Casa derruba o veto; senão, é mantido."""
+        if resultado.status != StatusResultado.APROVADO:
+            self._concluir(StatusTramitacao.REJEITADA, decisao="VETO_MANTIDO")
+            return
+        if self._casa_atual == CasaLegislativa.CAMARA:
+            self._mudar_de_casa(
+                CasaLegislativa.SENADO,
+                FaseTramitacao.APRECIACAO_VETO,
+                motivo="Apreciação do veto: apuração no Senado (CF, art. 66, § 4º)",
+            )
+            return
+        self._concluir(StatusTramitacao.APROVADA, decisao="VETO_DERRUBADO")
+
+    def _exigir_aguardando_sancao(self, operacao: str) -> None:
+        if self._status != StatusTramitacao.ENVIADA_A_SANCAO:
+            if self.tipo == TipoMateriaCongresso.PEC:
+                motivo = "PEC é promulgada pelas Mesas e não vai a sanção (CF, art. 60, § 3º)"
+            else:
+                motivo = (
+                    "só a matéria aprovada nas duas Casas e enviada à sanção pode ser "
+                    "sancionada ou vetada (CF, art. 66)"
+                )
+            msg = (
+                f"Não é possível {operacao} a matéria '{self.materia_id}' "
+                f"(situação {self._status.value}): {motivo}."
+            )
+            raise TramitacaoInvalidaError(msg)
 
     def _retornar_para_apreciar_emendas(self) -> None:
         """Devolve à iniciadora a matéria emendada pela revisora.
@@ -405,10 +542,12 @@ class TramitacaoLegislativa:
             dados["motivo"] = motivo
         self._registrar_no_log(TipoEvento.TRAMITACAO_CASA_ALTERADA, dados)
 
-    def _concluir(self, status: StatusTramitacao) -> None:
+    def _concluir(self, status: StatusTramitacao, decisao: str | None = None) -> None:
         self._status = status
         self._sincronizar_cadastro(ativa=False)
         dados: dict[str, str] = {"status": status.value, "casa": self._casa_atual.value}
+        if decisao is not None:
+            dados["decisao"] = decisao
         if self._texto_prevalecente is not None:
             dados["texto_prevalecente"] = self._texto_prevalecente.value
         self._registrar_no_log(TipoEvento.TRAMITACAO_CONCLUIDA, dados)
@@ -417,11 +556,15 @@ class TramitacaoLegislativa:
         if self.log is not None:
             self.log.registrar(evento, dados)
 
-    def _exigir_em_tramitacao(self, operacao: str) -> None:
-        if self._status != StatusTramitacao.EM_TRAMITACAO:
+    def _exigir_deliberacao_aberta(self, operacao: str) -> None:
+        """Há votação a fazer no Congresso: em tramitação ou com veto em apreciação."""
+        if self._status not in (
+            StatusTramitacao.EM_TRAMITACAO,
+            StatusTramitacao.VETO_EM_APRECIACAO,
+        ):
             msg = (
                 f"Não é possível {operacao}: a matéria '{self.materia_id}' "
-                f"já foi concluída com situação {self._status.value}."
+                f"não está em deliberação no Congresso (situação {self._status.value})."
             )
             raise TramitacaoInvalidaError(msg)
 

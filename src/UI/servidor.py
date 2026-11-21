@@ -170,6 +170,15 @@ class ManipuladorRequisicoesUI(BaseHTTPRequestHandler):
                 liberar_imediatamente=liberar,
             )
 
+        if caminho.startswith("/api/tramitacoes/") and caminho.endswith("/sancionar"):
+            meio = caminho.removeprefix("/api/tramitacoes/").removesuffix("/sancionar")
+            return HTTPStatus.OK, self.app.sancionar_tramitacao(unquote(meio).strip("/"))
+
+        if caminho.startswith("/api/tramitacoes/") and caminho.endswith("/vetar"):
+            meio = caminho.removeprefix("/api/tramitacoes/").removesuffix("/vetar")
+            razoes = str(corpo.get("razoes", ""))
+            return HTTPStatus.OK, self.app.vetar_tramitacao(unquote(meio).strip("/"), razoes)
+
         if caminho.startswith("/api/tramitacoes/") and caminho.endswith("/convocar-sessao"):
             meio = caminho.removeprefix("/api/tramitacoes/").removesuffix("/convocar-sessao")
             materia_id = unquote(meio).strip("/")

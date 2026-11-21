@@ -1538,17 +1538,38 @@ function renderizarAbaCongresso() {
         .map((chave) => {
           const t = tramitacoes[chave];
           const concluida = t.concluida;
-          const statusBadge = concluida
-            ? t.aprovada
-              ? `<span class="badge badge-success">APROVADA</span>`
-              : `<span class="badge badge-danger">ARQUIVADA / REJEITADA</span>`
-            : `<span class="badge badge-info">EM ANDAMENTO</span>`;
-          const emEmendas = t.fase === "APRECIACAO_EMENDAS";
+          const badges = {
+            EM_TRAMITACAO: `<span class="badge badge-info">EM ANDAMENTO</span>`,
+            ENVIADA_A_SANCAO: `<span class="badge badge-warning">ENVIADA À SANÇÃO</span>`,
+            VETO_EM_APRECIACAO: `<span class="badge badge-warning">VETO EM APRECIAÇÃO</span>`,
+            APROVADA: `<span class="badge badge-success">APROVADA</span>`,
+            PROMULGADA: `<span class="badge badge-success">PROMULGADA</span>`,
+            REJEITADA: `<span class="badge badge-danger">ARQUIVADA / REJEITADA</span>`,
+          };
+          const statusBadge = badges[t.status] || `<span class="badge badge-subtle">${t.status}</span>`;
+          const emEmendas = t.fase === "APRECIACAO_EMENDAS" && t.status === "EM_TRAMITACAO";
+          const emVeto = t.status === "VETO_EM_APRECIACAO";
+          const passouPorEmendas = t.fase === "APRECIACAO_EMENDAS" || Boolean(t.texto_prevalecente);
+          const ehPec = t.tipo === "PEC";
+          const congressoVencido = !["EM_TRAMITACAO"].includes(t.status);
           const rotulosFase = {
             CASA_INICIADORA: "Casa iniciadora",
             CASA_REVISORA: "Casa revisora",
             APRECIACAO_EMENDAS: "Apreciação das emendas da revisora (CF, art. 65)",
+            APRECIACAO_VETO: "Apreciação do veto: maioria absoluta em cada Casa, votação aberta (CF, art. 66, § 4º)",
           };
+          const rotuloFase = t.status === "ENVIADA_A_SANCAO"
+            ? "Aguardando sanção ou veto do Presidente da República (CF, art. 66)"
+            : t.status === "PROMULGADA"
+              ? "Promulgada pelas Mesas da Câmara e do Senado (CF, art. 60, § 3º)"
+              : concluida && t.razoes_veto
+                ? t.status === "APROVADA"
+                  ? "Veto derrubado pelo Congresso: lei aprovada (CF, art. 66, § 5º)"
+                  : "Veto mantido: matéria rejeitada"
+                : concluida && t.status === "APROVADA" && !t.razoes_veto && !ehPec
+                  ? "Sancionada pelo Presidente da República (CF, art. 66)"
+                  : rotulosFase[t.fase] || t.fase;
+          const veto = t.razoes_veto ? `<br />Razões do veto: <strong>${t.razoes_veto}</strong>` : "";
           const textoFinal = t.texto_prevalecente
             ? `<br />Texto que prevaleceu: <strong>${t.texto_prevalecente === "REVISORA" ? "da revisora (emendas acolhidas)" : "da iniciadora (emendas rejeitadas)"}</strong>`
             : "";
@@ -1563,29 +1584,49 @@ function renderizarAbaCongresso() {
                 ${statusBadge}
               </div>
               <div style="font-size: 0.8rem; color: var(--text-muted);">
-                Casa Atual: <strong>${t.casa_atual}</strong> | ${emEmendas ? "Sessão única" : `Turno: <strong>${t.turno_atual}º</strong>`}
-                <br />Fase: ${rotulosFase[t.fase] || t.fase}${textoFinal}
+                Casa Atual: <strong>${t.casa_atual}</strong> | ${emEmendas || emVeto ? "Sessão única por Casa" : `Turno: <strong>${t.turno_atual}º</strong>`}
+                <br />Fase: ${rotuloFase}${textoFinal}${veto}
               </div>
               <div class="tramitacao-stepper">
-                <span class="tramitacao-stage ${t.fase === "CASA_INICIADORA" ? "active" : "done"}">
+                <span class="tramitacao-stage ${t.fase === "CASA_INICIADORA" && t.status === "EM_TRAMITACAO" ? "active" : "done"}">
                   Iniciadora (${t.casa_iniciadora})
                 </span>
                 <span>➔</span>
-                <span class="tramitacao-stage ${t.fase === "CASA_REVISORA" ? "active" : concluida || emEmendas ? "done" : ""}">
+                <span class="tramitacao-stage ${t.fase === "CASA_REVISORA" && t.status === "EM_TRAMITACAO" ? "active" : congressoVencido || passouPorEmendas ? "done" : ""}">
                   Revisora (${t.casa_revisora})
                 </span>
                 ${
-                  emEmendas || t.texto_prevalecente
-                    ? `<span>➔</span><span class="tramitacao-stage ${emEmendas && !concluida ? "active" : "done"}">Emendas (${t.casa_iniciadora})</span>`
+                  passouPorEmendas
+                    ? `<span>➔</span><span class="tramitacao-stage ${emEmendas ? "active" : "done"}">Emendas (${t.casa_iniciadora})</span>`
+                    : ""
+                }
+                <span>➔</span>
+                <span class="tramitacao-stage ${t.status === "ENVIADA_A_SANCAO" ? "active" : concluida && t.status !== "REJEITADA" ? "done" : ""}">
+                  ${ehPec ? "Promulgação" : "Sanção"}
+                </span>
+                ${
+                  emVeto || t.razoes_veto
+                    ? `<span>➔</span><span class="tramitacao-stage ${emVeto ? "active" : "done"}">Veto (${t.casa_atual})</span>`
                     : ""
                 }
               </div>
               ${
-                !concluida
+                t.em_deliberacao
                   ? `
                 <button class="btn btn-primary btn-sm btn-block" onclick="convocarSessaoTramitacao('${t.materia_id}')">
                   🏛️ Convocar Sessão do Plenário (${t.id_proxima_sessao})
                 </button>
+              `
+                  : ""
+              }
+              ${
+                t.status === "ENVIADA_A_SANCAO"
+                  ? `
+                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; align-items: flex-end;">
+                  <button class="btn btn-success btn-sm" style="flex: 1; min-width: 120px;" onclick="sancionarTramitacao('${t.materia_id}')">✍️ Sancionar</button>
+                  <input type="text" id="razoes-veto-${t.materia_id}" placeholder="Razões do veto" style="flex: 2; min-width: 160px;" />
+                  <button class="btn btn-danger btn-sm" style="flex: 1; min-width: 120px;" onclick="vetarTramitacao('${t.materia_id}')">🚫 Vetar</button>
+                </div>
               `
                   : ""
               }
@@ -1631,6 +1672,31 @@ function renderizarAbaCongresso() {
         </tbody>
       </table>
     `;
+  }
+}
+
+async function sancionarTramitacao(materiaId) {
+  try {
+    await apiFetch(`/api/tramitacoes/${encodeURIComponent(materiaId)}/sancionar`, { method: "POST" });
+    mostrarToast(`${materiaId} sancionada: tramitação concluída como aprovada.`, "success");
+    await carregarEstadoCompleto();
+  } catch (err) {
+    mostrarToast(`Erro ao sancionar: ${err.message}`, "error");
+  }
+}
+
+async function vetarTramitacao(materiaId) {
+  const campo = document.getElementById(`razoes-veto-${materiaId}`);
+  const razoes = campo ? campo.value : "";
+  try {
+    await apiFetch(`/api/tramitacoes/${encodeURIComponent(materiaId)}/vetar`, {
+      method: "POST",
+      body: JSON.stringify({ razoes }),
+    });
+    mostrarToast(`${materiaId} vetada: convoque a apreciação do veto (maioria absoluta em cada Casa).`, "info");
+    await carregarEstadoCompleto();
+  } catch (err) {
+    mostrarToast(`Erro ao vetar: ${err.message}`, "error");
   }
 }
 
