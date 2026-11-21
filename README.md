@@ -13,7 +13,7 @@ usando um único núcleo de software. São atendidos três contextos:
 | --- | --- | --- | --- | --- |
 | **Eleição de Centro Acadêmico** | Discentes com matrícula ativa | 1 por eleitor | Quórum mínimo de votantes e percentual dos aptos; vence a chapa com maioria simples dos votos válidos | Secreto |
 | **Assembleia de acionistas** | Acionistas com ações ordinárias, diretamente ou por procuração | Proporcional ao número de ações | Quórum de instalação sobre o capital; maioria simples, absoluta ou qualificada (2/3, 3/5) conforme a pauta | Aberto e nominal |
-| **Congresso Nacional** | Deputados e senadores em exercício | 1 por parlamentar | Quórum de instalação de cada Casa; maioria simples (PL), absoluta (PLP) ou 3/5 em dois turnos (PEC), com tramitação bicameral | Nominal |
+| **Congresso Nacional** | Deputados e senadores em exercício | 1 por parlamentar | Quórum de instalação de cada Casa; maioria simples (PL), absoluta (PLP) ou 3/5 em dois turnos (PEC), com tramitação bicameral, retorno por emenda e promulgação ou sanção e veto | Nominal |
 
 Cada voto é registrado em um log de auditoria encadeado por SHA-256. O eleitor recebe um
 protocolo que comprova a inclusão do voto, e a comissão guarda uma âncora de encerramento
@@ -64,10 +64,10 @@ scripts `schema.sql` e `seeds.sql`.
 | Tela | O que permite fazer |
 | --- | --- |
 | Painel Geral | Ver os indicadores do sistema e consultar a aptidão e o peso do voto de um eleitor |
-| Sessões & Urna | Criar sessões com a regra de cada contexto, conduzir o ciclo de vida, votar e apurar |
+| Sessões & Urna | Criar sessões com a regra de cada contexto, conduzir o ciclo de vida (inclusive suspender, retomar e anular), registrar presença no Congresso, votar e apurar |
 | Centro Acadêmico | Cadastrar discentes e chapas |
 | Assembleia S.A. | Cadastrar acionistas, procuradores e candidatos; outorgar e revogar procurações |
-| Congresso & Leis | Protocolar matérias, cadastrar parlamentares e conduzir a tramitação entre as Casas |
+| Congresso & Leis | Protocolar matérias, cadastrar parlamentares, conduzir a tramitação entre as Casas (inclusive emendas) e registrar sanção ou veto |
 | Auditoria SHA-256 | Inspecionar a cadeia de registros, a âncora de encerramento e verificar um protocolo |
 
 ### Uso como biblioteca
@@ -128,6 +128,19 @@ Decisões e padrões principais:
   parte do voto, e a votação só é liberada com a maioria absoluta da Casa presente
   (CF, art. 47). Na apuração, a regra ainda exige o mínimo de votos registrados,
   inclusive abstenções.
+- **Retorno à Casa iniciadora por emenda.** Se a Casa revisora aprova com emendas, a
+  matéria volta à iniciadora, que aprecia apenas as emendas em sessão única (CF, art. 65,
+  parágrafo único); o histórico registra qual texto prevaleceu, e a troca de Casa fica
+  no log de auditoria da tramitação.
+- **Conclusão por tipo de matéria.** A PEC aprovada nas duas Casas é promulgada, sem
+  sanção (CF, art. 60, § 3º). O projeto de lei vai à sanção; vetado, o veto é apreciado
+  com maioria absoluta exigida em cada Casa, em votação aberta (art. 66, § 4º, e EC
+  76/2013): derrubado, a lei está aprovada; mantido, a matéria é rejeitada.
+- **Suspensão e retomada da sessão.** A votação pode ser suspensa com motivo e retomada
+  quantas vezes for preciso, preservando os votos colhidos e sem estender a janela de
+  votação; as duas transições ficam no log de auditoria. Uma sessão viciada pode ser
+  anulada com motivo a partir da abertura: ANULADA é terminal, não produz resultado, e a
+  tramitação mantém a etapa para que outra sessão seja convocada.
 - **Sigilo por contexto na interface.** No CA, a UI não expõe votos individuais, parciais,
   nem a opção ou o horário dos registros de voto; na Assembleia e no Congresso, o voto é
   aberto e nominal.
@@ -206,9 +219,6 @@ O fluxo completo está em [CONTRIBUTING.md](CONTRIBUTING.md).
   votante, e as identidades vêm de cadastros fictícios.
 - O log de auditoria grava os votos na ordem de chegada. O sigilo no CA é garantido pela
   interface, e o embaralhamento das cédulas no próprio log está no backlog (#28).
-- A tramitação conclui a matéria como aprovada ou rejeitada; emenda pela Casa revisora,
-  promulgação, sanção e veto estão no backlog (#33, #34).
-- Suspensão, retomada e anulação de sessão não estão implementadas (#38, #39).
 
 ## Membros da equipe
 

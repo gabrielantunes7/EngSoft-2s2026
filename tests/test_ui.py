@@ -13,7 +13,8 @@ import pytest
 
 from UI.app import EstadoAplicacaoUI
 from UI.servidor import criar_servidor
-from votacao.sessao import EstadoSessao
+from votacao.sessao import EstadoSessao, VotoRecusadoError
+from votacao.tramitacao import TramitacaoInvalidaError
 
 
 class TestEstadoAplicacaoUI:
@@ -284,6 +285,188 @@ class TestEstadoAplicacaoUI:
         )
         assert res_cons["voto"]["peso"] > 0
 
+    def test_suspensao_e_retomada_pela_interface(self) -> None:
+        # #38: suspender preserva os votos; a retomada devolve a votação.
+        app = EstadoAplicacaoUI()
+        app.registrar_voto_na_sessao(
+            "ELEICAO-CA-2026", {"eleitor_id": "247314", "opcao": "Chapa Renova"}
+        )
+
+        suspensa = app.suspender_sessao("ELEICAO-CA-2026", "Questão de ordem")
+        assert suspensa["estado"] == "SUSPENSA"
+        assert suspensa["motivo_suspensao"] == "Questão de ordem"
+        assert suspensa["total_votos"] == 1
+
+        with pytest.raises(VotoRecusadoError, match="suspensa"):
+            app.registrar_voto_na_sessao(
+                "ELEICAO-CA-2026", {"eleitor_id": "242352", "opcao": "Chapa Renova"}
+            )
+
+        retomada = app.retomar_sessao("ELEICAO-CA-2026")
+        assert retomada["estado"] == "EM_VOTACAO"
+        assert retomada["motivo_suspensao"] is None
+        assert retomada["total_suspensoes"] == 1
+        app.registrar_voto_na_sessao(
+            "ELEICAO-CA-2026", {"eleitor_id": "242352", "opcao": "Chapa Renova"}
+        )
+        assert app.apurar_sessao("ELEICAO-CA-2026")["resultado"]["vencedor"] == "CHAPA RENOVA"
+
+        eventos = [r["evento"] for r in retomada["auditoria"]["registros"]]
+        assert eventos[-2:] == ["VOTACAO_SUSPENSA", "VOTACAO_RETOMADA"]
+
+    def test_anulacao_pela_interface(self) -> None:
+        # #39: anular descarta o resultado e fica no log com o motivo.
+        app = EstadoAplicacaoUI()
+        for ra in ("247314", "242352"):
+            app.registrar_voto_na_sessao(
+                "ELEICAO-CA-2026", {"eleitor_id": ra, "opcao": "Chapa Renova"}
+            )
+        app.apurar_sessao("ELEICAO-CA-2026")
+
+        anulada = app.anular_sessao("ELEICAO-CA-2026", "Eleitor inapto votou")
+
+        assert anulada["estado"] == "ANULADA"
+        assert anulada["motivo_anulacao"] == "Eleitor inapto votou"
+        assert anulada["resultado"] is None
+        assert anulada["auditoria"]["registros"][-1]["evento"] == "SESSAO_ANULADA"
+
+    def test_anulacao_na_tramitacao_mantem_a_etapa(self) -> None:
+        app = EstadoAplicacaoUI()
+        conv = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)
+        id_sessao = conv["sessao"]["id_sessao"]
+        app.registrar_presenca_sessao(id_sessao, {"bancada": 300})
+        app.liberar_votacao_sessao(id_sessao)
+        app.simular_votacao_plenario(id_sessao, {"votos_sim": 280})
+
+        app.anular_sessao(id_sessao, "Painel de votação com defeito")
+        tram = app.tramitacoes["PL-101/2026"]
+        assert tram.casa_atual.value == "CAMARA"
+        assert tram.historico == ()
+
+        # Nova sessão para a mesma etapa; a anulada fica arquivada como tentativa
+        nova = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)
+        assert nova["sessao"]["id_sessao"] == id_sessao
+        assert nova["sessao"]["estado"] == "CRIADA"
+        tentativas = [s for s in app.sessoes if "TENTATIVA" in s]
+        assert [app.serializar_sessao(t)["estado"] for t in tentativas] == ["ANULADA"]
+
+    def test_anulacao_recusada_depois_do_registro_na_tramitacao(self) -> None:
+        app = EstadoAplicacaoUI()
+        id_sessao = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)[
+            "sessao"
+        ]["id_sessao"]
+        app.registrar_presenca_sessao(id_sessao, {"bancada": 300})
+        app.liberar_votacao_sessao(id_sessao)
+        app.simular_votacao_plenario(id_sessao, {"votos_sim": 280})
+        app.apurar_sessao(id_sessao)
+
+        with pytest.raises(ValueError, match="já foi registrado na tramitação"):
+            app.anular_sessao(id_sessao, "Vício")
+        assert app.serializar_sessao(id_sessao)["estado"] == "ENCERRADA"
+
+    @staticmethod
+    def _turno_aprovado(app: EstadoAplicacaoUI, materia: str, com_emenda: bool = False) -> dict:
+        sessao = app.convocar_sessao_tramitacao(materia, liberar_imediatamente=False)["sessao"]
+        id_sessao = sessao["id_sessao"]
+        app.registrar_presenca_sessao(id_sessao, {"bancada": sessao["quorum_instalacao"]})
+        app.liberar_votacao_sessao(id_sessao)
+        app.simular_votacao_plenario(id_sessao, {"votos_sim": sessao["quorum_instalacao"]})
+        return app.apurar_sessao(id_sessao, com_emenda=com_emenda)
+
+    def test_emenda_da_revisora_volta_a_iniciadora_pela_interface(self) -> None:
+        # #33: a revisora aprova com emenda; a iniciadora aprecia as emendas.
+        app = EstadoAplicacaoUI()
+        self._turno_aprovado(app, "PL-101/2026")  # Câmara
+        tram = app._serializar_tramitacao(app.tramitacoes["PL-101/2026"])
+        assert tram["fase"] == "CASA_REVISORA"
+        assert tram["aceita_emenda"] is True
+
+        self._turno_aprovado(app, "PL-101/2026", com_emenda=True)  # Senado emenda
+        tram = app._serializar_tramitacao(app.tramitacoes["PL-101/2026"])
+        assert tram["fase"] == "APRECIACAO_EMENDAS"
+        assert tram["casa_atual"] == "CAMARA"
+        assert tram["id_proxima_sessao"] == "PL-101/2026-CAMARA-EMENDAS"
+        assert tram["historico"][-1]["com_emenda"] is True
+
+        conv = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)
+        assert (
+            "Apreciação das emendas" in app.metadados_sessoes[conv["sessao"]["id_sessao"]]["titulo"]
+        )
+
+        # A iniciadora rejeita as emendas: prevalece o seu texto, e a matéria é aprovada
+        id_emendas = conv["sessao"]["id_sessao"]
+        app.registrar_presenca_sessao(id_emendas, {"bancada": 300})
+        app.liberar_votacao_sessao(id_emendas)
+        app.simular_votacao_plenario(id_emendas, {"votos_sim": 20, "votos_nao": 270})
+        app.apurar_sessao(id_emendas)
+
+        tram = app._serializar_tramitacao(app.tramitacoes["PL-101/2026"])
+        assert tram["status"] == "ENVIADA_A_SANCAO"  # #34: a lei segue para a sanção
+        assert tram["texto_prevalecente"] == "INICIADORA"
+        assert [e["evento"] for e in tram["log_rito"]] == [
+            "TRAMITACAO_CASA_ALTERADA",
+            "TRAMITACAO_CASA_ALTERADA",
+            "TRAMITACAO_ENVIADA_A_SANCAO",
+        ]
+
+    def test_sancao_e_veto_pela_interface(self) -> None:
+        # #34: a lei aprovada vai à sanção; o veto é apreciado em cada Casa.
+        app = EstadoAplicacaoUI()
+        self._turno_aprovado(app, "PL-101/2026")
+        self._turno_aprovado(app, "PL-101/2026")
+        tram = app._serializar_tramitacao(app.tramitacoes["PL-101/2026"])
+        assert tram["status"] == "ENVIADA_A_SANCAO"
+        assert tram["concluida"] is False
+        assert tram["em_deliberacao"] is False
+
+        with pytest.raises(ValueError, match="razões do veto"):
+            app.vetar_tramitacao("PL-101/2026", "")
+        tram = app.vetar_tramitacao("PL-101/2026", "Vício de iniciativa")
+        assert tram["status"] == "VETO_EM_APRECIACAO"
+        assert tram["id_proxima_sessao"] == "PL-101/2026-VETO-CAMARA"
+        assert tram["em_deliberacao"] is True
+
+        conv = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)
+        assert "Apreciação do veto" in app.metadados_sessoes[conv["sessao"]["id_sessao"]]["titulo"]
+        # Derrubada exige maioria absoluta: 257 na Câmara e 41 no Senado
+        for _casa in ("CAMARA", "SENADO"):
+            sessao = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)[
+                "sessao"
+            ]
+            id_sessao = sessao["id_sessao"]
+            app.registrar_presenca_sessao(id_sessao, {"bancada": sessao["quorum_instalacao"]})
+            app.liberar_votacao_sessao(id_sessao)
+            app.simular_votacao_plenario(id_sessao, {"votos_sim": sessao["quorum_instalacao"]})
+            app.apurar_sessao(id_sessao)
+
+        tram = app._serializar_tramitacao(app.tramitacoes["PL-101/2026"])
+        assert tram["status"] == "APROVADA"
+        assert tram["concluida"] is True
+        assert tram["log_rito"][-1]["dados"]["decisao"] == "VETO_DERRUBADO"
+
+    def test_sancao_de_materia_em_tramitacao_e_recusada(self) -> None:
+        app = EstadoAplicacaoUI()
+        with pytest.raises(TramitacaoInvalidaError, match="aprovada nas duas Casas"):
+            app.sancionar_tramitacao("PL-101/2026")
+        with pytest.raises(KeyError, match="não encontrada"):
+            app.sancionar_tramitacao("PL-999/2026")
+
+    def test_emenda_fora_da_revisora_e_recusada_antes_da_apuracao(self) -> None:
+        app = EstadoAplicacaoUI()
+        sessao = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)[
+            "sessao"
+        ]
+        app.registrar_presenca_sessao(sessao["id_sessao"], {"bancada": 300})
+        app.liberar_votacao_sessao(sessao["id_sessao"])
+
+        with pytest.raises(ValueError, match="apenas a Casa revisora emenda"):
+            app.apurar_sessao(sessao["id_sessao"], com_emenda=True)
+        # A recusa veio antes da apuração: a sessão segue em votação
+        assert app.serializar_sessao(sessao["id_sessao"])["estado"] == "EM_VOTACAO"
+
+        with pytest.raises(ValueError, match="só se aplica a sessões de tramitação"):
+            app.apurar_sessao("ELEICAO-CA-2026", com_emenda=True)
+
     def test_registro_de_presenca_valida_parlamentar_e_casa(self) -> None:
         # #37: só compõem o quórum parlamentares da Casa da sessão e em exercício.
         app = EstadoAplicacaoUI()
@@ -405,10 +588,11 @@ class TestEstadoAplicacaoUI:
                 {"eleitor_id": "AC-003", "opcao": "CONS-IMPEDIDO", "modo": "DIRETO"},
             )
 
-    def test_tramitacao_completa_pec_quatro_turnos_ate_aprovacao(self) -> None:
+    def test_tramitacao_completa_pec_quatro_turnos_e_promulgacao(self) -> None:
         """Verifica o ciclo completo da PEC (2 turnos na Câmara e 2 turnos no Senado).
 
-        A tramitação termina em APROVADA: a etapa de promulgação ainda não existe (#34).
+        Aprovada nas duas Casas, a PEC é promulgada pelas Mesas, sem sanção
+        (CF, art. 60, § 3º; #34).
         """
         app = EstadoAplicacaoUI()
 
@@ -455,14 +639,14 @@ class TestEstadoAplicacaoUI:
         assert tram.casa_atual.value == "SENADO"
         assert tram.turno_atual == 2
 
-        # Turno 2 no Senado -> aprovação final da PEC
+        # Turno 2 no Senado -> aprovação final e promulgação da PEC
         res4 = app.convocar_sessao_tramitacao("PEC-77/2026", liberar_imediatamente=True)
         s4 = res4["sessao"]["id_sessao"]
         app.registrar_presenca_sessao(s4, {"bancada": 64})
         app.liberar_votacao_sessao(s4)
         app.simular_votacao_plenario(s4, {"votos_sim": 52, "votos_nao": 12})
         app.apurar_sessao(s4)
-        assert tram.status.value == "APROVADA"
+        assert tram.status.value == "PROMULGADA"
 
     def test_auditoria_completa_e_ancora_encerramento(self) -> None:
         """Verifica a integridade da cadeia de blocos SHA-256 e a âncora de fechamento."""
@@ -695,6 +879,12 @@ class TestServidorHTTP:
         assert st_sim == 200
         assert res_sim["votos_adicionados"] == 290
 
+        # #34 pela API: sancionar matéria ainda em tramitação é 409; inexistente é 404
+        st_sanc, _ = self._post(base_url, "/api/tramitacoes/PL-888%2F2026/sancionar", {})
+        assert st_sanc == 409
+        st_inex, _ = self._post(base_url, "/api/tramitacoes/PL-000%2F2026/vetar", {"razoes": "x"})
+        assert st_inex == 404
+
         # Endpoint POST inexistente -> 404
         st_404, res_404 = self._post(base_url, "/api/nao-existe", {})
         assert st_404 == 404
@@ -741,6 +931,39 @@ class TestServidorHTTP:
         # Encerrar e depois apurar (EM_APURACAO -> ENCERRADA) é o fluxo válido
         assert self._post(base_url, "/api/sessoes/SESSAO-CONFLITO/encerrar", {})[0] == 200
         assert self._post(base_url, "/api/sessoes/SESSAO-CONFLITO/apurar", {})[0] == 200
+
+        # #38 pela API: suspender sem motivo é 400; votar com a sessão suspensa é 409
+        self._post(
+            base_url,
+            "/api/sessoes",
+            {
+                "id_sessao": "SESSAO-SUSP",
+                "contexto": "CA",
+                "abrir_imediatamente": True,
+                "liberar_imediatamente": True,
+            },
+        )
+        assert self._post(base_url, "/api/sessoes/SESSAO-SUSP/suspender", {})[0] == 400
+        st_susp, res_susp = self._post(
+            base_url, "/api/sessoes/SESSAO-SUSP/suspender", {"motivo": "Questão de ordem"}
+        )
+        assert st_susp == 200
+        assert res_susp["estado"] == "SUSPENSA"
+        assert self._post(base_url, "/api/sessoes/SESSAO-SUSP/votar", voto)[0] == 409
+        assert self._post(base_url, "/api/sessoes/SESSAO-SUSP/encerrar", {})[0] == 409
+        st_ret, res_ret = self._post(base_url, "/api/sessoes/SESSAO-SUSP/retomar", {})
+        assert st_ret == 200
+        assert res_ret["estado"] == "EM_VOTACAO"
+
+        # #39 pela API: anular sem motivo é 400; votar em sessão anulada é 409
+        assert self._post(base_url, "/api/sessoes/SESSAO-SUSP/anular", {})[0] == 400
+        st_anul, res_anul = self._post(
+            base_url, "/api/sessoes/SESSAO-SUSP/anular", {"motivo": "Credenciamento falho"}
+        )
+        assert st_anul == 200
+        assert res_anul["estado"] == "ANULADA"
+        assert self._post(base_url, "/api/sessoes/SESSAO-SUSP/votar", voto)[0] == 409
+        assert self._post(base_url, "/api/sessoes/SESSAO-SUSP/anular", {"motivo": "x"})[0] == 409
 
         # Apurar de novo uma sessão já encerrada é transição inválida
         st_rep, _ = self._post(base_url, "/api/sessoes/SESSAO-CONFLITO/apurar", {})

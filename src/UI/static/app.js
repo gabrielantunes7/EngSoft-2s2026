@@ -81,7 +81,7 @@ function atualizarTodaInterface() {
 function atualizarBadgesEContadores() {
   if (!estadoApp) return;
   const sessoesAtivas = Object.values(estadoApp.sessoes || {}).filter(
-    (s) => s.estado === "EM_VOTACAO" || s.estado === "ABERTA"
+    (s) => ["EM_VOTACAO", "ABERTA", "SUSPENSA"].includes(s.estado)
   ).length;
 
   const badge = document.getElementById("badge-sessoes-ativas");
@@ -312,6 +312,10 @@ function obterBadgeEstado(estado) {
       return `<span class="badge badge-info">🔵 Aberta</span>`;
     case "EM_VOTACAO":
       return `<span class="badge badge-success">🟢 Em Votação</span>`;
+    case "ANULADA":
+      return `<span class="badge badge-danger">⛔ Anulada</span>`;
+    case "SUSPENSA":
+      return `<span class="badge badge-warning">⏸️ Suspensa</span>`;
     case "EM_APURACAO":
       return `<span class="badge badge-warning">🟡 Em Apuração</span>`;
     case "ENCERRADA":
@@ -389,6 +393,17 @@ function renderizarDetalheSessao(idSessao) {
   const podeAbrir = sessao.estado === "CRIADA";
   const podeLiberar = sessao.estado === "ABERTA" || sessao.estado === "CRIADA";
   const podeEncerrar = sessao.estado === "EM_VOTACAO";
+  const podeSuspender = sessao.estado === "EM_VOTACAO";
+  // #33: só a sessão convocada pela tramitação na Casa revisora pode aprovar com emenda.
+  const tramDaSessao = meta.tramitacao_materia_id && estadoApp.tramitacoes
+    ? estadoApp.tramitacoes[meta.tramitacao_materia_id]
+    : null;
+  const aceitaEmenda = Boolean(
+    tramDaSessao && tramDaSessao.aceita_emenda && tramDaSessao.sessao_convocada_id === sessao.id_sessao
+  );
+  const anulada = sessao.estado === "ANULADA";
+  const podeAnular = !["CRIADA", "ANULADA"].includes(sessao.estado);
+  const suspensa = sessao.estado === "SUSPENSA";
   // Apurar é permitido direto da votação (o servidor encerra antes) ou após o
   // encerramento da urna (EM_APURACAO). Uma sessão ENCERRADA já foi apurada.
   const podeApurar = sessao.estado === "EM_VOTACAO" || sessao.estado === "EM_APURACAO";
@@ -396,8 +411,14 @@ function renderizarDetalheSessao(idSessao) {
   // Stepper visual dos estados: EM_APURACAO deixa a etapa 4 ativa (em andamento)
   // e ENCERRADA a marca como concluída.
   const estados = ["CRIADA", "ABERTA", "EM_VOTACAO", "EM_APURACAO", "ENCERRADA"];
-  const ordemAtual = estados.indexOf(sessao.estado);
-  const rotuloEtapaFinal = sessao.estado === "EM_APURACAO" ? "Em Apuração" : "Encerrada / Apurada";
+  // SUSPENSA é um desvio temporário da etapa de votação (#38): ocupa a etapa 3.
+  const ordemAtual = suspensa ? 2 : estados.indexOf(sessao.estado);
+  const rotuloEtapaVotacao = suspensa ? "Suspensa" : "Em Votação";
+  const rotuloEtapaFinal = anulada
+    ? "⛔ Anulada"
+    : sessao.estado === "EM_APURACAO"
+      ? "Em Apuração"
+      : "Encerrada / Apurada";
 
   const stepperHtml = `
     <div class="session-stepper">
@@ -410,7 +431,7 @@ function renderizarDetalheSessao(idSessao) {
       </div>
       <div class="step-divider"></div>
       <div class="step-item ${ordemAtual >= 2 ? (ordemAtual === 2 ? "active" : "completed") : ""}">
-        <span class="step-dot">${ordemAtual > 2 ? "✓" : "3"}</span> Em Votação
+        <span class="step-dot">${ordemAtual > 2 ? "✓" : suspensa ? "⏸" : "3"}</span> ${rotuloEtapaVotacao}
       </div>
       <div class="step-divider"></div>
       <div class="step-item ${ordemAtual >= 3 ? (ordemAtual === 3 ? "active" : "completed") : ""}">
@@ -434,6 +455,16 @@ function renderizarDetalheSessao(idSessao) {
           A urna só aceita votos quando a sessão estiver no estado <strong>EM_VOTACAO</strong>.
           ${podeLiberar ? "Clique em 'Liberar Votação' abaixo para permitir votos." : ""}
           ${sessao.estado === "EM_APURACAO" ? "Urna fechada: clique em 'Apurar Resultado' para concluir a sessão." : ""}
+          ${
+            anulada
+              ? `Sessão anulada: <strong>${sessao.motivo_anulacao}</strong>. Os votos permanecem no log de auditoria, mas a sessão não produz resultado.`
+              : ""
+          }
+          ${
+            suspensa
+              ? `Sessão suspensa: <strong>${sessao.motivo_suspensao}</strong>. Os ${sessao.total_votos} voto(s) já colhidos estão preservados; retome a sessão para continuar a votação.`
+              : ""
+          }
         </p>
         ${montarReciboVotoHtml(sessao.id_sessao)}
       </div>
@@ -464,9 +495,25 @@ function renderizarDetalheSessao(idSessao) {
         ${podeAbrir ? `<button class="btn btn-secondary btn-sm" onclick="acaoSessao('${sessao.id_sessao}', 'abrir')">▶️ Abrir Sessão</button>` : ""}
         ${podeLiberar ? `<button class="btn btn-primary btn-sm" onclick="acaoSessao('${sessao.id_sessao}', 'liberar')">🔓 Liberar Votação</button>` : ""}
         ${podeEncerrar ? `<button class="btn btn-danger btn-sm" onclick="acaoSessao('${sessao.id_sessao}', 'encerrar')">⏹️ Encerrar Votação</button>` : ""}
-        ${podeApurar ? `<button class="btn btn-success btn-sm" onclick="acaoSessao('${sessao.id_sessao}', 'apurar')">📊 Apurar Resultado</button>` : ""}
+        ${suspensa ? `<button class="btn btn-primary btn-sm" onclick="acaoSessao('${sessao.id_sessao}', 'retomar')">▶️ Retomar Sessão</button>` : ""}
+        ${podeApurar && aceitaEmenda ? `<label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.8rem;"><input type="checkbox" id="apurar-com-emenda" /> Aprovação com emendas (Casa revisora)</label>` : ""}
+        ${podeApurar ? `<button class="btn btn-success btn-sm" onclick="apurarSessao('${sessao.id_sessao}')">📊 Apurar Resultado</button>` : ""}
       </div>
+      ${
+        podeSuspender
+          ? `
+        <form onsubmit="submeterSuspensao(event, '${sessao.id_sessao}')" style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; margin-bottom: 1.25rem;">
+          <div style="flex: 3; min-width: 200px;">
+            <label for="motivo-suspensao" style="font-size: 0.72rem;">Motivo da suspensão</label>
+            <input type="text" id="motivo-suspensao" placeholder="Ex.: queda de quórum, questão de ordem" />
+          </div>
+          <button type="submit" class="btn btn-secondary btn-sm" style="flex: 1; min-width: 140px;">⏸️ Suspender Sessão</button>
+        </form>
+      `
+          : ""
+      }
 
+      ${montarAnulacaoHtml(sessao, podeAnular)}
       ${montarPainelPresencaHtml(sessao, meta)}
       ${urnaHtml}
       ${apuracaoHtml}
@@ -483,7 +530,7 @@ function renderizarDetalheSessao(idSessao) {
 // voto, e a votação só é liberada com a maioria absoluta da Casa presente (CF, art. 47).
 function montarPainelPresencaHtml(sessao, meta) {
   if (sessao.quorum_instalacao === null || sessao.quorum_instalacao === undefined) return "";
-  const aceitaPresenca = ["CRIADA", "ABERTA", "EM_VOTACAO"].includes(sessao.estado);
+  const aceitaPresenca = ["CRIADA", "ABERTA", "EM_VOTACAO", "SUSPENSA"].includes(sessao.estado);
   const atingido = sessao.total_presentes >= sessao.quorum_instalacao;
   const perc = Math.min(100, (sessao.total_presentes / sessao.quorum_instalacao) * 100).toFixed(1);
   const casa = meta.casa || null;
@@ -532,6 +579,52 @@ function montarPainelPresencaHtml(sessao, meta) {
       }
     </div>
   `;
+}
+
+function montarAnulacaoHtml(sessao, podeAnular) {
+  if (!podeAnular) return "";
+  return `
+    <details style="margin-bottom: 1.25rem;">
+      <summary style="cursor: pointer; font-size: 0.85rem; color: var(--danger);">⛔ Anular sessão viciada</summary>
+      <form onsubmit="submeterAnulacao(event, '${sessao.id_sessao}')" style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; margin-top: 0.5rem;">
+        <div style="flex: 3; min-width: 200px;">
+          <label for="motivo-anulacao" style="font-size: 0.72rem;">Motivo da anulação (vício apurado)</label>
+          <input type="text" id="motivo-anulacao" placeholder="Ex.: eleitor inapto votou, falha no credenciamento" />
+        </div>
+        <button type="submit" class="btn btn-danger btn-sm" style="flex: 1; min-width: 140px;">Anular Sessão</button>
+      </form>
+    </details>
+  `;
+}
+
+async function submeterAnulacao(event, idSessao) {
+  event.preventDefault();
+  const motivo = document.getElementById("motivo-anulacao").value;
+  try {
+    await apiFetch(`/api/sessoes/${encodeURIComponent(idSessao)}/anular`, {
+      method: "POST",
+      body: JSON.stringify({ motivo }),
+    });
+    mostrarToast("Sessão anulada. O motivo ficou registrado no log de auditoria.", "success");
+    await carregarEstadoCompleto();
+  } catch (err) {
+    mostrarToast(`Erro ao anular: ${err.message}`, "error");
+  }
+}
+
+async function submeterSuspensao(event, idSessao) {
+  event.preventDefault();
+  const motivo = document.getElementById("motivo-suspensao").value;
+  try {
+    await apiFetch(`/api/sessoes/${encodeURIComponent(idSessao)}/suspender`, {
+      method: "POST",
+      body: JSON.stringify({ motivo }),
+    });
+    mostrarToast("Sessão suspensa. Os votos já colhidos estão preservados.", "success");
+    await carregarEstadoCompleto();
+  } catch (err) {
+    mostrarToast(`Erro ao suspender: ${err.message}`, "error");
+  }
 }
 
 async function submeterPresenca(event, idSessao) {
@@ -797,6 +890,24 @@ async function submeterSimulacaoPlenario(event, idSessao) {
     await carregarEstadoCompleto();
   } catch (err) {
     mostrarToast(`Erro na simulação de bancada: ${err.message}`, "error");
+  }
+}
+
+async function apurarSessao(idSessao) {
+  const marcador = document.getElementById("apurar-com-emenda");
+  const comEmenda = Boolean(marcador && marcador.checked);
+  try {
+    const res = await apiFetch(`/api/sessoes/${encodeURIComponent(idSessao)}/apurar`, {
+      method: "POST",
+      body: JSON.stringify({ com_emenda: comEmenda }),
+    });
+    const aviso = comEmenda && res.resultado && res.resultado.status === "APROVADO"
+      ? " Aprovada com emendas: a matéria volta à Casa iniciadora."
+      : "";
+    mostrarToast(`Sessão apurada.${aviso}`, "success");
+    await carregarEstadoCompleto();
+  } catch (err) {
+    mostrarToast(`Erro ao apurar: ${err.message}`, "error");
   }
 }
 
@@ -1427,11 +1538,41 @@ function renderizarAbaCongresso() {
         .map((chave) => {
           const t = tramitacoes[chave];
           const concluida = t.concluida;
-          const statusBadge = concluida
-            ? t.aprovada
-              ? `<span class="badge badge-success">APROVADA E PROMULGADA</span>`
-              : `<span class="badge badge-danger">ARQUIVADA / REJEITADA</span>`
-            : `<span class="badge badge-info">EM ANDAMENTO</span>`;
+          const badges = {
+            EM_TRAMITACAO: `<span class="badge badge-info">EM ANDAMENTO</span>`,
+            ENVIADA_A_SANCAO: `<span class="badge badge-warning">ENVIADA À SANÇÃO</span>`,
+            VETO_EM_APRECIACAO: `<span class="badge badge-warning">VETO EM APRECIAÇÃO</span>`,
+            APROVADA: `<span class="badge badge-success">APROVADA</span>`,
+            PROMULGADA: `<span class="badge badge-success">PROMULGADA</span>`,
+            REJEITADA: `<span class="badge badge-danger">ARQUIVADA / REJEITADA</span>`,
+          };
+          const statusBadge = badges[t.status] || `<span class="badge badge-subtle">${t.status}</span>`;
+          const emEmendas = t.fase === "APRECIACAO_EMENDAS" && t.status === "EM_TRAMITACAO";
+          const emVeto = t.status === "VETO_EM_APRECIACAO";
+          const passouPorEmendas = t.fase === "APRECIACAO_EMENDAS" || Boolean(t.texto_prevalecente);
+          const ehPec = t.tipo === "PEC";
+          const congressoVencido = !["EM_TRAMITACAO"].includes(t.status);
+          const rotulosFase = {
+            CASA_INICIADORA: "Casa iniciadora",
+            CASA_REVISORA: "Casa revisora",
+            APRECIACAO_EMENDAS: "Apreciação das emendas da revisora (CF, art. 65)",
+            APRECIACAO_VETO: "Apreciação do veto: maioria absoluta em cada Casa, votação aberta (CF, art. 66, § 4º)",
+          };
+          const rotuloFase = t.status === "ENVIADA_A_SANCAO"
+            ? "Aguardando sanção ou veto do Presidente da República (CF, art. 66)"
+            : t.status === "PROMULGADA"
+              ? "Promulgada pelas Mesas da Câmara e do Senado (CF, art. 60, § 3º)"
+              : concluida && t.razoes_veto
+                ? t.status === "APROVADA"
+                  ? "Veto derrubado pelo Congresso: lei aprovada (CF, art. 66, § 5º)"
+                  : "Veto mantido: matéria rejeitada"
+                : concluida && t.status === "APROVADA" && !t.razoes_veto && !ehPec
+                  ? "Sancionada pelo Presidente da República (CF, art. 66)"
+                  : rotulosFase[t.fase] || t.fase;
+          const veto = t.razoes_veto ? `<br />Razões do veto: <strong>${t.razoes_veto}</strong>` : "";
+          const textoFinal = t.texto_prevalecente
+            ? `<br />Texto que prevaleceu: <strong>${t.texto_prevalecente === "REVISORA" ? "da revisora (emendas acolhidas)" : "da iniciadora (emendas rejeitadas)"}</strong>`
+            : "";
 
           return `
             <div class="tramitacao-card">
@@ -1443,24 +1584,49 @@ function renderizarAbaCongresso() {
                 ${statusBadge}
               </div>
               <div style="font-size: 0.8rem; color: var(--text-muted);">
-                Casa Atual: <strong>${t.casa_atual}</strong> | Turno: <strong>${t.turno_atual}º</strong>
-                <br />Fase: ${t.fase}
+                Casa Atual: <strong>${t.casa_atual}</strong> | ${emEmendas || emVeto ? "Sessão única por Casa" : `Turno: <strong>${t.turno_atual}º</strong>`}
+                <br />Fase: ${rotuloFase}${textoFinal}${veto}
               </div>
               <div class="tramitacao-stepper">
-                <span class="tramitacao-stage ${t.fase === "CASA_INICIADORA" ? "active" : "done"}">
+                <span class="tramitacao-stage ${t.fase === "CASA_INICIADORA" && t.status === "EM_TRAMITACAO" ? "active" : "done"}">
                   Iniciadora (${t.casa_iniciadora})
                 </span>
                 <span>➔</span>
-                <span class="tramitacao-stage ${t.fase === "CASA_REVISORA" ? "active" : concluida ? "done" : ""}">
+                <span class="tramitacao-stage ${t.fase === "CASA_REVISORA" && t.status === "EM_TRAMITACAO" ? "active" : congressoVencido || passouPorEmendas ? "done" : ""}">
                   Revisora (${t.casa_revisora})
                 </span>
+                ${
+                  passouPorEmendas
+                    ? `<span>➔</span><span class="tramitacao-stage ${emEmendas ? "active" : "done"}">Emendas (${t.casa_iniciadora})</span>`
+                    : ""
+                }
+                <span>➔</span>
+                <span class="tramitacao-stage ${t.status === "ENVIADA_A_SANCAO" ? "active" : concluida && t.status !== "REJEITADA" ? "done" : ""}">
+                  ${ehPec ? "Promulgação" : "Sanção"}
+                </span>
+                ${
+                  emVeto || t.razoes_veto
+                    ? `<span>➔</span><span class="tramitacao-stage ${emVeto ? "active" : "done"}">Veto (${t.casa_atual})</span>`
+                    : ""
+                }
               </div>
               ${
-                !concluida
+                t.em_deliberacao
                   ? `
                 <button class="btn btn-primary btn-sm btn-block" onclick="convocarSessaoTramitacao('${t.materia_id}')">
                   🏛️ Convocar Sessão do Plenário (${t.id_proxima_sessao})
                 </button>
+              `
+                  : ""
+              }
+              ${
+                t.status === "ENVIADA_A_SANCAO"
+                  ? `
+                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; align-items: flex-end;">
+                  <button class="btn btn-success btn-sm" style="flex: 1; min-width: 120px;" onclick="sancionarTramitacao('${t.materia_id}')">✍️ Sancionar</button>
+                  <input type="text" id="razoes-veto-${t.materia_id}" placeholder="Razões do veto" style="flex: 2; min-width: 160px;" />
+                  <button class="btn btn-danger btn-sm" style="flex: 1; min-width: 120px;" onclick="vetarTramitacao('${t.materia_id}')">🚫 Vetar</button>
+                </div>
               `
                   : ""
               }
@@ -1506,6 +1672,31 @@ function renderizarAbaCongresso() {
         </tbody>
       </table>
     `;
+  }
+}
+
+async function sancionarTramitacao(materiaId) {
+  try {
+    await apiFetch(`/api/tramitacoes/${encodeURIComponent(materiaId)}/sancionar`, { method: "POST" });
+    mostrarToast(`${materiaId} sancionada: tramitação concluída como aprovada.`, "success");
+    await carregarEstadoCompleto();
+  } catch (err) {
+    mostrarToast(`Erro ao sancionar: ${err.message}`, "error");
+  }
+}
+
+async function vetarTramitacao(materiaId) {
+  const campo = document.getElementById(`razoes-veto-${materiaId}`);
+  const razoes = campo ? campo.value : "";
+  try {
+    await apiFetch(`/api/tramitacoes/${encodeURIComponent(materiaId)}/vetar`, {
+      method: "POST",
+      body: JSON.stringify({ razoes }),
+    });
+    mostrarToast(`${materiaId} vetada: convoque a apreciação do veto (maioria absoluta em cada Casa).`, "info");
+    await carregarEstadoCompleto();
+  } catch (err) {
+    mostrarToast(`Erro ao vetar: ${err.message}`, "error");
   }
 }
 

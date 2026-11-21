@@ -131,7 +131,8 @@ def test_tramitacao_lei_ordinaria_aprovada_nas_duas_casas():
     assert tramitacao.turno_atual == 1
 
     sessao_senado, status_senado = _aprovar(tramitacao)
-    assert status_senado == StatusTramitacao.APROVADA
+    # Desde a #34, lei aprovada nas duas Casas vai à sanção (CF, art. 66).
+    assert status_senado == StatusTramitacao.ENVIADA_A_SANCAO
 
     assert [r.id_sessao for r in tramitacao.historico] == [
         "PL-101/2026-CAMARA-T1",
@@ -151,7 +152,8 @@ def test_tramitacao_pec_exige_dois_turnos_em_cada_casa():
         sessao, _ = _aprovar(tramitacao)
         etapas.append(sessao.id_sessao)
 
-    assert tramitacao.status == StatusTramitacao.APROVADA
+    # Desde a #34, PEC aprovada nas duas Casas é promulgada (CF, art. 60, § 3º).
+    assert tramitacao.status == StatusTramitacao.PROMULGADA
     assert etapas == [
         "PEC-50/2026-CAMARA-T1",
         "PEC-50/2026-CAMARA-T2",
@@ -184,11 +186,11 @@ def test_tramitacao_concluida_recusa_novo_registro():
     tramitacao = TramitacaoLegislativa("PL-101/2026", TipoMateriaCongresso.LEI_ORDINARIA)
     _aprovar(tramitacao)
     sessao, _ = _aprovar(tramitacao)
-    assert tramitacao.status == StatusTramitacao.APROVADA
+    assert tramitacao.status == StatusTramitacao.ENVIADA_A_SANCAO  # #34
 
-    with pytest.raises(TramitacaoInvalidaError, match="APROVADA"):
+    with pytest.raises(TramitacaoInvalidaError, match="ENVIADA_A_SANCAO"):
         tramitacao.nova_sessao()
-    with pytest.raises(TramitacaoInvalidaError, match="APROVADA"):
+    with pytest.raises(TramitacaoInvalidaError, match="ENVIADA_A_SANCAO"):
         tramitacao.registrar_resultado(sessao)
 
 
@@ -341,7 +343,7 @@ def test_tramitacao_aprovada_arquiva_a_materia_no_repositorio():
     _aprovar(tramitacao)
     _, status = _aprovar(tramitacao)
 
-    assert status == StatusTramitacao.APROVADA
+    assert status == StatusTramitacao.ENVIADA_A_SANCAO  # #34: sai do Congresso para a sanção
     materia = repo.obter_materia("PL-101/2026")
     assert materia is not None
     assert materia.ativa is False
