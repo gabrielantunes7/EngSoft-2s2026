@@ -28,6 +28,10 @@ REJEITAR = {
 
 def _votar(sessao: SessaoVotacao, sim: int, nao: int = 0) -> None:
     sessao.abrir()
+    # Desde a #37 a sessão de cada turno só libera a votação com quórum de presença.
+    # Registra presentes suficientes para instalar; quantos votam é decidido abaixo.
+    quorum = sessao.quorum_instalacao or 0
+    sessao.registrar_presenca(*(f"{sessao.id_sessao}-P{i}" for i in range(quorum)))
     sessao.liberar_votacao()
     for i in range(sim):
         sessao.registrar_voto(Voto(eleitor_id=f"{sessao.id_sessao}-S{i}", opcao="SIM"))

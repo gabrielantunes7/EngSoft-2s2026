@@ -53,7 +53,14 @@ class RegraCongresso(RegraDeVotacao):
 
     @property
     def quorum_instalacao(self) -> int:
-        """Retorna o número mínimo de parlamentares presentes para abrir a votação."""
+        """Número mínimo de parlamentares presentes para abrir a votação.
+
+        É a maioria absoluta dos membros da Casa: "salvo disposição constitucional em
+        contrário, as deliberações de cada Casa e de suas Comissões serão tomadas por
+        maioria dos votos, presente a maioria absoluta de seus membros" (CF, art. 47).
+        A sessão afere esse número na abertura, pela presença; `validar_quorum` o confere
+        novamente na apuração, pelos votos registrados, inclusive abstenções.
+        """
         if self.casa == CasaLegislativa.CAMARA:
             return self.QUORUM_INSTALACAO_CAMARA
         return self.QUORUM_INSTALACAO_SENADO

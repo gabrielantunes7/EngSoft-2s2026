@@ -38,6 +38,10 @@ class VotoRecusadoError(Exception):
     """Voto inadmissível: o eleitor já votou ou a janela de votação não está aberta."""
 
 
+class QuorumInstalacaoError(TransicaoInvalidaError):
+    """Votação não liberada: os presentes não atingem o quórum de instalação."""
+
+
 class SessaoVotacao:
     """Sessão de votação controlada por uma máquina de estados e padrão Observer.
 
@@ -49,6 +53,11 @@ class SessaoVotacao:
     A sessão atua como publicador (Subject) no padrão Observer: sempre que transita de
     estado ou admite um voto, notifica os observadores registrados (como o
     `ObservadorAuditoria`), permitindo desacoplar a auditoria, notificações e métricas.
+
+    Quando há quórum de instalação, a sessão só delibera com quórum aferido **antes**
+    da votação: a presença é registrada à parte do voto e a urna só é liberada se o
+    número de presentes atingir o mínimo (CF, art. 47). Sem quórum de instalação, a
+    presença é apenas informativa e o comportamento é o de antes.
 
     Attributes:
         id_sessao: Identificador da sessão.
@@ -64,6 +73,7 @@ class SessaoVotacao:
         log: LogDeAuditoria | None = None,
         observadores: Sequence[ObservadorSessao] | None = None,
         relogio: Callable[[], datetime] | None = None,
+        quorum_instalacao: int | None = None,
     ) -> None:
         """Cria a sessão no estado CRIADA.
 
@@ -77,10 +87,12 @@ class SessaoVotacao:
             relogio: Função que devolve o instante corrente, usada para aplicar a
                 janela de votação. O padrão é a hora corrente em UTC; injetar outra
                 torna a trava temporal determinística nos testes.
+            quorum_instalacao: Número mínimo de presentes para liberar a votação.
+                None (padrão) dispensa a aferição na abertura.
 
         Raises:
-            ValueError: Se o identificador for vazio, o total de aptos for negativo ou
-                o log pertencer a outra votação.
+            ValueError: Se o identificador for vazio, o total de aptos ou o quórum de
+                instalação for negativo, ou o log pertencer a outra votação.
             TypeError: Se a regra não implementar RegraDeVotacao.
         """
         if not id_sessao.strip():
@@ -92,6 +104,9 @@ class SessaoVotacao:
         if total_aptos < 0:
             msg = "O total de aptos não pode ser negativo."
             raise ValueError(msg)
+        if quorum_instalacao is not None and quorum_instalacao < 0:
+            msg = "O quórum de instalação não pode ser negativo."
+            raise ValueError(msg)
         if log is not None and log.id_votacao != id_sessao:
             msg = (
                 f"O log de auditoria pertence à votação '{log.id_votacao}', "
@@ -102,6 +117,8 @@ class SessaoVotacao:
         self.id_sessao = id_sessao
         self.regra = regra
         self.total_aptos = total_aptos
+        self._quorum_instalacao = quorum_instalacao
+        self._presentes: set[str] = set()
         self._observadores: list[ObservadorSessao] = []
         self._log = log
 
@@ -188,9 +205,54 @@ class SessaoVotacao:
         """Resultado da apuração, ou None enquanto a sessão não for apurada."""
         return self._resultado
 
+    @property
+    def quorum_instalacao(self) -> int | None:
+        """Mínimo de presentes para liberar a votação, ou None se não houver aferição."""
+        return self._quorum_instalacao
+
+    @property
+    def presentes(self) -> frozenset[str]:
+        """Participantes cuja presença foi registrada, inclusive por terem votado."""
+        return frozenset(self._presentes)
+
+    @property
+    def total_presentes(self) -> int:
+        """Quantidade de participantes presentes."""
+        return len(self._presentes)
+
     def abrir(self) -> None:
         """Instala a sessão (CRIADA → ABERTA)."""
         self._transitar(de=EstadoSessao.CRIADA, para=EstadoSessao.ABERTA)
+
+    def registrar_presenca(self, *participantes: str) -> int:
+        """Registra a presença de participantes, em operação distinta do voto.
+
+        Presença e voto são fatos diferentes: um parlamentar presente pode se abster de
+        votar, e é a presença, e não o voto, que instala a deliberação (CF, art. 47).
+        Registrar de novo quem já está presente não tem efeito.
+
+        Args:
+            participantes: Identificadores dos presentes.
+
+        Returns:
+            Total de presentes após o registro.
+
+        Raises:
+            ValueError: Se algum identificador for vazio.
+            TransicaoInvalidaError: Se a urna já foi fechada (EM_APURACAO ou ENCERRADA).
+        """
+        if self._estado in (EstadoSessao.EM_APURACAO, EstadoSessao.ENCERRADA):
+            msg = (
+                f"Não é possível registrar presença na sessão '{self.id_sessao}': "
+                f"a votação já foi encerrada (estado {self._estado.value})."
+            )
+            raise TransicaoInvalidaError(msg)
+        if any(not p.strip() for p in participantes):
+            msg = "O identificador do participante presente não pode ser vazio."
+            raise ValueError(msg)
+
+        self._presentes.update(participantes)
+        return len(self._presentes)
 
     def liberar_votacao(
         self,
@@ -206,11 +268,24 @@ class SessaoVotacao:
         Raises:
             ValueError: Se o início for posterior ao fim.
             TransicaoInvalidaError: Se a sessão não estiver em ABERTA.
+            QuorumInstalacaoError: Se houver quórum de instalação e os presentes não o
+                atingirem. A sessão permanece em ABERTA, e nenhum voto é colhido.
         """
         self._exigir_estado(EstadoSessao.ABERTA, operacao="passar a EM_VOTACAO")
         if inicio is not None and fim is not None and inicio > fim:
             msg = "O início da janela de votação não pode ser posterior ao fim."
             raise ValueError(msg)
+        self._exigir_quorum_instalacao()
+
+        dados: dict[str, Any] = {
+            "inicio": inicio.isoformat() if inicio is not None else None,
+            "fim": fim.isoformat() if fim is not None else None,
+            "total_aptos": self.total_aptos,
+        }
+        if self._quorum_instalacao is not None:
+            # A instalação fica no log com quantos estavam presentes (RNF-RITO-01).
+            dados["total_presentes"] = len(self._presentes)
+            dados["quorum_instalacao"] = self._quorum_instalacao
 
         self._inicio_votacao = inicio
         self._fim_votacao = fim
@@ -218,11 +293,7 @@ class SessaoVotacao:
             de=EstadoSessao.ABERTA,
             para=EstadoSessao.EM_VOTACAO,
             evento=TipoEvento.VOTACAO_ABERTA,
-            dados={
-                "inicio": inicio.isoformat() if inicio is not None else None,
-                "fim": fim.isoformat() if fim is not None else None,
-                "total_aptos": self.total_aptos,
-            },
+            dados=dados,
         )
 
     def encerrar_votacao(self) -> None:
@@ -260,6 +331,8 @@ class SessaoVotacao:
             raise VotoRecusadoError(msg)
 
         self._eleitores.update(identidades)
+        # Quem vota está presente: garante presentes >= votantes mesmo sem registro prévio.
+        self._presentes.update(identidades)
         self._votos.append(voto)
 
         protocolo: str | None = None
@@ -326,6 +399,18 @@ class SessaoVotacao:
                 f"estado atual é {self._estado.value}, esperado {esperado.value}."
             )
             raise TransicaoInvalidaError(msg)
+
+    def _exigir_quorum_instalacao(self) -> None:
+        if self._quorum_instalacao is None:
+            return
+        presentes = len(self._presentes)
+        if presentes < self._quorum_instalacao:
+            msg = (
+                f"Quórum de instalação não atingido na sessão '{self.id_sessao}': "
+                f"há {presentes} presentes e são exigidos {self._quorum_instalacao} "
+                f"(CF, art. 47). A votação não foi liberada."
+            )
+            raise QuorumInstalacaoError(msg)
 
     def _exigir_dentro_da_janela(self) -> None:
         if self._inicio_votacao is None and self._fim_votacao is None:

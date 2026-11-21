@@ -467,6 +467,7 @@ function renderizarDetalheSessao(idSessao) {
         ${podeApurar ? `<button class="btn btn-success btn-sm" onclick="acaoSessao('${sessao.id_sessao}', 'apurar')">📊 Apurar Resultado</button>` : ""}
       </div>
 
+      ${montarPainelPresencaHtml(sessao, meta)}
       ${urnaHtml}
       ${apuracaoHtml}
     </div>
@@ -475,6 +476,78 @@ function renderizarDetalheSessao(idSessao) {
   // Preenche dinamicamente o select de eleitores da urna
   if (emVotacao) {
     preencherEleitoresUrna(contexto, sessao);
+  }
+}
+
+// #37: quórum de instalação aferido na abertura. A presença é registrada à parte do
+// voto, e a votação só é liberada com a maioria absoluta da Casa presente (CF, art. 47).
+function montarPainelPresencaHtml(sessao, meta) {
+  if (sessao.quorum_instalacao === null || sessao.quorum_instalacao === undefined) return "";
+  const aceitaPresenca = ["CRIADA", "ABERTA", "EM_VOTACAO"].includes(sessao.estado);
+  const atingido = sessao.total_presentes >= sessao.quorum_instalacao;
+  const perc = Math.min(100, (sessao.total_presentes / sessao.quorum_instalacao) * 100).toFixed(1);
+  const casa = meta.casa || null;
+  const parls = ((estadoApp.congresso && estadoApp.congresso.parlamentares) || []).filter(
+    (p) => (!casa || p.casa === casa) && p.apto_votar
+  );
+
+  return `
+    <div class="urna-panel" style="margin-bottom: 1.25rem;">
+      <div class="urna-title">
+        <h4>🙋 Quórum de Instalação (Presença)</h4>
+        <span class="badge ${atingido ? "badge-success" : "badge-warning"}">
+          ${atingido ? "Quórum atingido" : "Quórum não atingido"}
+        </span>
+      </div>
+      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">
+        A votação só é liberada com a maioria absoluta da Casa presente (CF, art. 47).
+        Presença e voto são registros distintos: um presente pode não votar.
+      </p>
+      <div class="chart-row">
+        <div class="chart-row-label">
+          <span>Presentes: <strong>${sessao.total_presentes}</strong> de ${sessao.total_aptos}</span>
+          <span>Mínimo exigido: <strong>${sessao.quorum_instalacao}</strong></span>
+        </div>
+        <div class="chart-bar-bg"><div class="chart-bar-fill ${atingido ? "fill-green" : "fill-red"}" style="width: ${perc}%;"></div></div>
+      </div>
+      ${
+        aceitaPresenca
+          ? `
+        <form onsubmit="submeterPresenca(event, '${sessao.id_sessao}')" style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; margin-top: 0.75rem;">
+          <div style="flex: 2; min-width: 180px;">
+            <label for="presenca-parlamentar" style="font-size: 0.72rem;">Parlamentar cadastrado</label>
+            <select id="presenca-parlamentar">
+              <option value="">— nenhum —</option>
+              ${parls.map((p) => `<option value="${p.id}">${p.id} — ${p.nome}</option>`).join("")}
+            </select>
+          </div>
+          <div style="flex: 1; min-width: 110px;">
+            <label for="presenca-bancada" style="font-size: 0.72rem;">Bancada (quantidade)</label>
+            <input type="number" id="presenca-bancada" min="0" max="${sessao.total_aptos}" value="${atingido ? 0 : sessao.quorum_instalacao}" />
+          </div>
+          <button type="submit" class="btn btn-secondary btn-sm" style="flex: 1 0 100%;">Registrar Presença</button>
+        </form>
+      `
+          : ""
+      }
+    </div>
+  `;
+}
+
+async function submeterPresenca(event, idSessao) {
+  event.preventDefault();
+  const parlamentar = document.getElementById("presenca-parlamentar").value;
+  const bancada = parseInt(document.getElementById("presenca-bancada").value || "0", 10);
+  const payload = { parlamentares: parlamentar ? [parlamentar] : [], bancada };
+  try {
+    const res = await apiFetch(`/api/sessoes/${encodeURIComponent(idSessao)}/presenca`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    mostrarToast(`Presença registrada: ${res.total_presentes} presentes.`, "success");
+    await carregarEstadoCompleto();
+  } catch (err) {
+    mostrarToast(`Erro ao registrar presença: ${err.message}`, "error");
   }
 }
 
@@ -828,6 +901,7 @@ async function submeterCriarSessao(event) {
       body: JSON.stringify(payload),
     });
     mostrarToast(`Sessão '${criada.id_sessao}' criada com sucesso!`, "success");
+    if (criada.aviso) mostrarToast(criada.aviso, "info");
     sessaoSelecionadaId = criada.id_sessao;
     await carregarEstadoCompleto();
   } catch (err) {
@@ -1441,7 +1515,12 @@ async function convocarSessaoTramitacao(materiaId) {
       method: "POST",
       body: JSON.stringify({ liberar_imediatamente: true }),
     });
-    mostrarToast(`Sessão '${res.sessao.id_sessao}' convocada e liberada com sucesso!`, "success");
+    if (res.aviso) {
+      // #37: sem quórum de presença, a sessão é convocada mas a votação não é liberada.
+      mostrarToast(`Sessão '${res.sessao.id_sessao}' convocada. ${res.aviso}`, "info");
+    } else {
+      mostrarToast(`Sessão '${res.sessao.id_sessao}' convocada e liberada com sucesso!`, "success");
+    }
     sessaoSelecionadaId = res.sessao.id_sessao;
     await carregarEstadoCompleto();
     navegarPara("sessoes");
