@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import ClassVar
 
-from votacao.auditoria import LogDeAuditoria
+from votacao.auditoria import LogDeAuditoria, TipoEvento
 from votacao.dados.congresso import RepositorioCongresso
 from votacao.fabricas.congresso import FabricaCongresso
 from votacao.modelos import (
@@ -26,6 +26,21 @@ class StatusTramitacao(StrEnum):
     REJEITADA = "REJEITADA"
 
 
+class FaseTramitacao(StrEnum):
+    """Etapa do rito bicameral em que a matéria se encontra."""
+
+    CASA_INICIADORA = "CASA_INICIADORA"
+    CASA_REVISORA = "CASA_REVISORA"
+    APRECIACAO_EMENDAS = "APRECIACAO_EMENDAS"
+
+
+class TextoPrevalecente(StrEnum):
+    """Texto que prevalece ao fim da apreciação das emendas da revisora (art. 65)."""
+
+    REVISORA = "REVISORA"
+    INICIADORA = "INICIADORA"
+
+
 class TramitacaoInvalidaError(Exception):
     """Operação incompatível com a situação da tramitação ou com a etapa corrente."""
 
@@ -41,6 +56,10 @@ class RegistroTramitacao:
         resultado: Resultado apurado pela sessão.
         valida: False quando a sessão não atingiu o quórum de instalação e, por isso,
             não produziu decisão de mérito.
+        fase: Etapa do rito em que a sessão ocorreu.
+        com_emenda: True quando a aprovação na Casa revisora veio com emendas.
+        texto_prevalecente: Na apreciação das emendas, qual texto prevaleceu; None nas
+            demais etapas.
     """
 
     id_sessao: str
@@ -48,6 +67,9 @@ class RegistroTramitacao:
     turno: int
     resultado: ResultadoApuracao
     valida: bool
+    fase: FaseTramitacao = FaseTramitacao.CASA_INICIADORA
+    com_emenda: bool = False
+    texto_prevalecente: TextoPrevalecente | None = None
 
 
 class TramitacaoLegislativa:
@@ -57,6 +79,11 @@ class TramitacaoLegislativa:
     a `RegraCongresso` da matéria e da Casa corrente. Ao registrar o resultado de uma
     sessão encerrada, a tramitação avança para o próximo turno, para a Casa revisora
     ou para a conclusão, conforme o rito exigido pelo tipo de matéria.
+
+    Se a Casa revisora aprova a matéria com emendas, ela volta à Casa iniciadora, que
+    aprecia apenas as emendas (CF, art. 65, parágrafo único). A apreciação é terminal:
+    acolhidas as emendas prevalece o texto da revisora; rejeitadas, o da iniciadora. Nos
+    dois casos a matéria está aprovada, e não há novo envio à revisora.
 
     Quando recebe um `RepositorioCongresso`, mantém a `MateriaLegislativa` cadastrada
     coerente com o rito: `casa_atual` acompanha a Casa em que a matéria se encontra e
@@ -68,6 +95,8 @@ class TramitacaoLegislativa:
         tipo: Tipo da matéria, que determina o número de turnos por Casa.
         casa_iniciadora: Casa em que a matéria começa a tramitar.
         repo: Repositório em que a matéria está cadastrada, ou None.
+        log: Log de auditoria do rito, em que ficam a troca de Casa (inclusive o retorno
+            por emenda) e a conclusão, ou None.
     """
 
     TURNOS_POR_MATERIA: ClassVar[dict[TipoMateriaCongresso, int]] = {
@@ -82,6 +111,7 @@ class TramitacaoLegislativa:
         tipo: TipoMateriaCongresso,
         casa_iniciadora: CasaLegislativa = CasaLegislativa.CAMARA,
         repo: RepositorioCongresso | None = None,
+        log: LogDeAuditoria | None = None,
     ) -> None:
         """Inicia a tramitação no primeiro turno da Casa iniciadora.
 
@@ -92,13 +122,19 @@ class TramitacaoLegislativa:
             repo: Repositório com o cadastro da matéria. Quando informado, a matéria
                 precisa existir, estar ativa, ter o mesmo tipo e estar pautada na
                 Casa iniciadora.
+            log: Log de auditoria do rito. Precisa ter sido criado com o identificador
+                da matéria.
 
         Raises:
-            ValueError: Se o identificador da matéria for vazio ou se o cadastro no
-                repositório divergir dos parâmetros informados.
+            ValueError: Se o identificador da matéria for vazio, se o cadastro no
+                repositório divergir dos parâmetros informados ou se o log pertencer a
+                outra matéria.
         """
         if not materia_id.strip():
             msg = "O identificador da matéria não pode ser vazio."
+            raise ValueError(msg)
+        if log is not None and log.id_votacao != materia_id:
+            msg = f"O log de auditoria pertence a '{log.id_votacao}', não à matéria '{materia_id}'."
             raise ValueError(msg)
 
         self.materia_id = materia_id
@@ -110,6 +146,10 @@ class TramitacaoLegislativa:
         self._status = StatusTramitacao.EM_TRAMITACAO
         self._historico: list[RegistroTramitacao] = []
         self._sessao_convocada: SessaoVotacao | None = None
+        self._fase = FaseTramitacao.CASA_INICIADORA
+        self._revisora_emendou = False
+        self._texto_prevalecente: TextoPrevalecente | None = None
+        self.log = log
 
         if repo is not None:
             self._conferir_cadastro(repo)
@@ -118,6 +158,24 @@ class TramitacaoLegislativa:
     def status(self) -> StatusTramitacao:
         """Situação corrente da matéria."""
         return self._status
+
+    @property
+    def fase(self) -> FaseTramitacao:
+        """Etapa do rito em que a matéria se encontra."""
+        return self._fase
+
+    @property
+    def aceita_emenda(self) -> bool:
+        """Se uma aprovação na etapa corrente pode vir com emendas (só na revisora)."""
+        return (
+            self._status == StatusTramitacao.EM_TRAMITACAO
+            and self._fase == FaseTramitacao.CASA_REVISORA
+        )
+
+    @property
+    def texto_prevalecente(self) -> TextoPrevalecente | None:
+        """Texto que prevaleceu na apreciação das emendas, ou None se não houve."""
+        return self._texto_prevalecente
 
     @property
     def casa_atual(self) -> CasaLegislativa:
@@ -148,7 +206,13 @@ class TramitacaoLegislativa:
 
     @property
     def id_proxima_sessao(self) -> str:
-        """Identificador que `nova_sessao` atribuirá à sessão da etapa corrente."""
+        """Identificador que `nova_sessao` atribuirá à sessão da etapa corrente.
+
+        A apreciação de emendas ocorre na mesma Casa do 1º turno da iniciadora; o
+        sufixo EMENDAS evita que os dois logs de auditoria colidam no mesmo id.
+        """
+        if self._fase == FaseTramitacao.APRECIACAO_EMENDAS:
+            return f"{self.materia_id}-{self._casa_atual.value}-EMENDAS"
         return f"{self.materia_id}-{self._casa_atual.value}-T{self._turno_atual}"
 
     def nova_sessao(
@@ -188,18 +252,28 @@ class TramitacaoLegislativa:
         self._sessao_convocada = sessao
         return sessao
 
-    def registrar_resultado(self, sessao: SessaoVotacao) -> StatusTramitacao:
+    def registrar_resultado(
+        self, sessao: SessaoVotacao, com_emenda: bool = False
+    ) -> StatusTramitacao:
         """Incorpora o resultado da sessão da etapa corrente e avança o rito.
 
         Aprovação avança o turno; vencidos os turnos da Casa, passa à revisora;
         vencidas as duas Casas, a matéria fica APROVADA. Rejeição em qualquer etapa
         encerra a tramitação como REJEITADA. Quórum insuficiente não é decisão de
         mérito: a sessão entra no histórico como inválida e a etapa se mantém, de modo
-        que uma nova sessão possa ser convocada.
+        que uma nova sessão possa ser convocada. Sessão anulada é recusada com o mesmo
+        efeito sobre a etapa: ela se mantém e outra sessão pode ser convocada.
+
+        Aprovação com emendas na Casa revisora não conclui o rito: vencidos os turnos
+        da revisora, a matéria volta à iniciadora para apreciar as emendas (CF, art. 65,
+        parágrafo único). Na apreciação, aprovar acolhe as emendas (prevalece o texto
+        da revisora) e rejeitar as recusa (prevalece o da iniciadora); nos dois casos a
+        matéria fica APROVADA.
 
         Args:
             sessao: Sessão convocada por `nova_sessao` para a etapa corrente, já
                 apurada.
+            com_emenda: Indica que a aprovação na Casa revisora veio com emendas.
 
         Returns:
             Situação da matéria após o registro.
@@ -207,7 +281,8 @@ class TramitacaoLegislativa:
         Raises:
             TramitacaoInvalidaError: Se a tramitação já foi concluída, se a sessão não
                 foi convocada por esta tramitação para a etapa corrente, se já foi
-                registrada ou se ainda não foi apurada.
+                registrada, se foi anulada, se ainda não foi apurada, ou se houver
+                emenda fora da Casa revisora ou em sessão que não aprovou a matéria.
         """
         self._exigir_em_tramitacao(operacao="registrar resultado")
 
@@ -218,6 +293,13 @@ class TramitacaoLegislativa:
                 "ou já teve seu resultado registrado."
             )
             raise TramitacaoInvalidaError(msg)
+        if sessao.estado == EstadoSessao.ANULADA:
+            msg = (
+                f"A sessão '{sessao.id_sessao}' foi anulada ({sessao.motivo_anulacao}) e não "
+                "produz resultado. A etapa se mantém: convoque uma nova sessão com "
+                "nova_sessao()."
+            )
+            raise TramitacaoInvalidaError(msg)
         if sessao.estado != EstadoSessao.ENCERRADA or sessao.resultado is None:
             msg = (
                 f"A sessão '{sessao.id_sessao}' ainda não foi apurada "
@@ -226,7 +308,18 @@ class TramitacaoLegislativa:
             raise TramitacaoInvalidaError(msg)
 
         resultado = sessao.resultado
+        if com_emenda:
+            self._exigir_emenda_admissivel(resultado)
+
         valida = resultado.status != StatusResultado.QUORUM_INSUFICIENTE
+        fase = self._fase
+        texto: TextoPrevalecente | None = None
+        if fase == FaseTramitacao.APRECIACAO_EMENDAS and valida:
+            texto = (
+                TextoPrevalecente.REVISORA
+                if resultado.status == StatusResultado.APROVADO
+                else TextoPrevalecente.INICIADORA
+            )
         self._historico.append(
             RegistroTramitacao(
                 id_sessao=sessao.id_sessao,
@@ -234,30 +327,95 @@ class TramitacaoLegislativa:
                 turno=self._turno_atual,
                 resultado=resultado,
                 valida=valida,
+                fase=fase,
+                com_emenda=com_emenda,
+                texto_prevalecente=texto,
             )
         )
         self._sessao_convocada = None
 
         if not valida:
             return self._status
+        if texto is not None:
+            # Apreciação de emendas é terminal: os dois desfechos aprovam a matéria.
+            self._texto_prevalecente = texto
+            self._concluir(StatusTramitacao.APROVADA)
+            return self._status
         if resultado.status == StatusResultado.REJEITADO:
-            self._status = StatusTramitacao.REJEITADA
-            self._sincronizar_cadastro(ativa=False)
+            self._concluir(StatusTramitacao.REJEITADA)
             return self._status
 
+        if com_emenda:
+            self._revisora_emendou = True
         self._avancar()
         return self._status
+
+    def _exigir_emenda_admissivel(self, resultado: ResultadoApuracao) -> None:
+        """Só a Casa revisora emenda (CF, art. 65), e só ao aprovar a matéria."""
+        if self._fase != FaseTramitacao.CASA_REVISORA:
+            msg = (
+                f"Emenda indicada na fase {self._fase.value} da matéria "
+                f"'{self.materia_id}': apenas a Casa revisora emenda o projeto "
+                "(CF, art. 65), e a apreciação das emendas não admite novas emendas."
+            )
+            raise TramitacaoInvalidaError(msg)
+        if resultado.status != StatusResultado.APROVADO:
+            msg = (
+                "Emenda indicada numa sessão que não aprovou a matéria "
+                f"(resultado {resultado.status.value}): a emenda acompanha a aprovação."
+            )
+            raise TramitacaoInvalidaError(msg)
 
     def _avancar(self) -> None:
         if self._turno_atual < self.turnos_por_casa:
             self._turno_atual += 1
         elif self._casa_atual == self.casa_iniciadora:
-            self._casa_atual = self.casa_revisora
-            self._turno_atual = 1
-            self._sincronizar_cadastro(casa_atual=self._casa_atual)
+            self._mudar_de_casa(self.casa_revisora, FaseTramitacao.CASA_REVISORA)
+        elif self._revisora_emendou:
+            self._retornar_para_apreciar_emendas()
         else:
-            self._status = StatusTramitacao.APROVADA
-            self._sincronizar_cadastro(ativa=False)
+            self._concluir(StatusTramitacao.APROVADA)
+
+    def _retornar_para_apreciar_emendas(self) -> None:
+        """Devolve à iniciadora a matéria emendada pela revisora.
+
+        "Sendo o projeto emendado, voltará à Casa iniciadora" (CF, art. 65, parágrafo
+        único). A iniciadora delibera apenas sobre as emendas, em sessão única.
+        """
+        self._mudar_de_casa(
+            self.casa_iniciadora,
+            FaseTramitacao.APRECIACAO_EMENDAS,
+            motivo="Retorno à Casa iniciadora para apreciar as emendas (CF, art. 65, p.u.)",
+        )
+
+    def _mudar_de_casa(
+        self,
+        destino: CasaLegislativa,
+        fase: FaseTramitacao,
+        motivo: str | None = None,
+    ) -> None:
+        origem = self._casa_atual
+        self._casa_atual = destino
+        self._turno_atual = 1
+        self._fase = fase
+        self._sincronizar_cadastro(casa_atual=destino)
+        dados: dict[str, str] = {"origem": origem.value, "destino": destino.value}
+        dados["fase"] = fase.value
+        if motivo is not None:
+            dados["motivo"] = motivo
+        self._registrar_no_log(TipoEvento.TRAMITACAO_CASA_ALTERADA, dados)
+
+    def _concluir(self, status: StatusTramitacao) -> None:
+        self._status = status
+        self._sincronizar_cadastro(ativa=False)
+        dados: dict[str, str] = {"status": status.value, "casa": self._casa_atual.value}
+        if self._texto_prevalecente is not None:
+            dados["texto_prevalecente"] = self._texto_prevalecente.value
+        self._registrar_no_log(TipoEvento.TRAMITACAO_CONCLUIDA, dados)
+
+    def _registrar_no_log(self, evento: TipoEvento, dados: dict[str, str]) -> None:
+        if self.log is not None:
+            self.log.registrar(evento, dados)
 
     def _exigir_em_tramitacao(self, operacao: str) -> None:
         if self._status != StatusTramitacao.EM_TRAMITACAO:

@@ -220,10 +220,19 @@ class ManipuladorRequisicoesUI(BaseHTTPRequestHandler):
                     return HTTPStatus.OK, self.app.registrar_presenca_sessao(id_sessao, corpo)
                 if acao == "simular-plenario":
                     return HTTPStatus.OK, self.app.simular_votacao_plenario(id_sessao, corpo)
+                if acao == "suspender":
+                    motivo = str(corpo.get("motivo", ""))
+                    return HTTPStatus.OK, self.app.suspender_sessao(id_sessao, motivo)
+                if acao == "anular":
+                    motivo = str(corpo.get("motivo", ""))
+                    return HTTPStatus.OK, self.app.anular_sessao(id_sessao, motivo)
+                if acao == "retomar":
+                    return HTTPStatus.OK, self.app.retomar_sessao(id_sessao)
                 if acao == "encerrar":
                     return HTTPStatus.OK, self.app.encerrar_votacao_sessao(id_sessao)
                 if acao == "apurar":
-                    return HTTPStatus.OK, self.app.apurar_sessao(id_sessao)
+                    com_emenda = bool(corpo.get("com_emenda", False))
+                    return HTTPStatus.OK, self.app.apurar_sessao(id_sessao, com_emenda=com_emenda)
                 if acao == "verificar-protocolo":
                     protocolo = str(corpo.get("protocolo", ""))
                     return HTTPStatus.OK, self.app.verificar_protocolo_auditoria(
