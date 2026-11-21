@@ -313,6 +313,56 @@ class TestEstadoAplicacaoUI:
         eventos = [r["evento"] for r in retomada["auditoria"]["registros"]]
         assert eventos[-2:] == ["VOTACAO_SUSPENSA", "VOTACAO_RETOMADA"]
 
+    def test_anulacao_pela_interface(self) -> None:
+        # #39: anular descarta o resultado e fica no log com o motivo.
+        app = EstadoAplicacaoUI()
+        for ra in ("247314", "242352"):
+            app.registrar_voto_na_sessao(
+                "ELEICAO-CA-2026", {"eleitor_id": ra, "opcao": "Chapa Renova"}
+            )
+        app.apurar_sessao("ELEICAO-CA-2026")
+
+        anulada = app.anular_sessao("ELEICAO-CA-2026", "Eleitor inapto votou")
+
+        assert anulada["estado"] == "ANULADA"
+        assert anulada["motivo_anulacao"] == "Eleitor inapto votou"
+        assert anulada["resultado"] is None
+        assert anulada["auditoria"]["registros"][-1]["evento"] == "SESSAO_ANULADA"
+
+    def test_anulacao_na_tramitacao_mantem_a_etapa(self) -> None:
+        app = EstadoAplicacaoUI()
+        conv = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)
+        id_sessao = conv["sessao"]["id_sessao"]
+        app.registrar_presenca_sessao(id_sessao, {"bancada": 300})
+        app.liberar_votacao_sessao(id_sessao)
+        app.simular_votacao_plenario(id_sessao, {"votos_sim": 280})
+
+        app.anular_sessao(id_sessao, "Painel de votação com defeito")
+        tram = app.tramitacoes["PL-101/2026"]
+        assert tram.casa_atual.value == "CAMARA"
+        assert tram.historico == ()
+
+        # Nova sessão para a mesma etapa; a anulada fica arquivada como tentativa
+        nova = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)
+        assert nova["sessao"]["id_sessao"] == id_sessao
+        assert nova["sessao"]["estado"] == "CRIADA"
+        tentativas = [s for s in app.sessoes if "TENTATIVA" in s]
+        assert [app.serializar_sessao(t)["estado"] for t in tentativas] == ["ANULADA"]
+
+    def test_anulacao_recusada_depois_do_registro_na_tramitacao(self) -> None:
+        app = EstadoAplicacaoUI()
+        id_sessao = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)[
+            "sessao"
+        ]["id_sessao"]
+        app.registrar_presenca_sessao(id_sessao, {"bancada": 300})
+        app.liberar_votacao_sessao(id_sessao)
+        app.simular_votacao_plenario(id_sessao, {"votos_sim": 280})
+        app.apurar_sessao(id_sessao)
+
+        with pytest.raises(ValueError, match="já foi registrado na tramitação"):
+            app.anular_sessao(id_sessao, "Vício")
+        assert app.serializar_sessao(id_sessao)["estado"] == "ENCERRADA"
+
     def test_registro_de_presenca_valida_parlamentar_e_casa(self) -> None:
         # #37: só compõem o quórum parlamentares da Casa da sessão e em exercício.
         app = EstadoAplicacaoUI()
@@ -793,6 +843,16 @@ class TestServidorHTTP:
         st_ret, res_ret = self._post(base_url, "/api/sessoes/SESSAO-SUSP/retomar", {})
         assert st_ret == 200
         assert res_ret["estado"] == "EM_VOTACAO"
+
+        # #39 pela API: anular sem motivo é 400; votar em sessão anulada é 409
+        assert self._post(base_url, "/api/sessoes/SESSAO-SUSP/anular", {})[0] == 400
+        st_anul, res_anul = self._post(
+            base_url, "/api/sessoes/SESSAO-SUSP/anular", {"motivo": "Credenciamento falho"}
+        )
+        assert st_anul == 200
+        assert res_anul["estado"] == "ANULADA"
+        assert self._post(base_url, "/api/sessoes/SESSAO-SUSP/votar", voto)[0] == 409
+        assert self._post(base_url, "/api/sessoes/SESSAO-SUSP/anular", {"motivo": "x"})[0] == 409
 
         # Apurar de novo uma sessão já encerrada é transição inválida
         st_rep, _ = self._post(base_url, "/api/sessoes/SESSAO-CONFLITO/apurar", {})

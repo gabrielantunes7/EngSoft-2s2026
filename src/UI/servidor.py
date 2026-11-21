@@ -223,6 +223,9 @@ class ManipuladorRequisicoesUI(BaseHTTPRequestHandler):
                 if acao == "suspender":
                     motivo = str(corpo.get("motivo", ""))
                     return HTTPStatus.OK, self.app.suspender_sessao(id_sessao, motivo)
+                if acao == "anular":
+                    motivo = str(corpo.get("motivo", ""))
+                    return HTTPStatus.OK, self.app.anular_sessao(id_sessao, motivo)
                 if acao == "retomar":
                     return HTTPStatus.OK, self.app.retomar_sessao(id_sessao)
                 if acao == "encerrar":

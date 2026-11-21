@@ -376,6 +376,7 @@ class EstadoAplicacaoUI:
             "total_presentes": s.total_presentes,
             "motivo_suspensao": s.motivo_suspensao,
             "total_suspensoes": s.total_suspensoes,
+            "motivo_anulacao": s.motivo_anulacao,
             "inicio_votacao": s.inicio_votacao.isoformat() if s.inicio_votacao else None,
             "fim_votacao": s.fim_votacao.isoformat() if s.fim_votacao else None,
             "total_votos": len(s.votos),
@@ -835,6 +836,25 @@ class EstadoAplicacaoUI:
         """Suspende a votação em curso, preservando os votos já colhidos (#38)."""
         sessao = self._obter_sessao(id_sessao)
         sessao.suspender(motivo)
+        return self.serializar_sessao(id_sessao)
+
+    def anular_sessao(self, id_sessao: str, motivo: str) -> dict[str, Any]:
+        """Anula uma sessão viciada, registrando o motivo (#39).
+
+        Na interface, a apuração de uma sessão de tramitação já registra o resultado no
+        rito. Anulá-la depois disso deixaria a matéria avançada por uma sessão anulada,
+        então a anulação só é aceita antes desse registro.
+        """
+        sessao = self._obter_sessao(id_sessao)
+        materia_id = self.metadados_sessoes.get(id_sessao, {}).get("tramitacao_materia_id")
+        tram = self.tramitacoes.get(materia_id) if materia_id else None
+        if tram is not None and any(r.id_sessao == sessao.id_sessao for r in tram.historico):
+            msg = (
+                f"O resultado da sessão '{id_sessao}' já foi registrado na tramitação de "
+                f"{materia_id}; a anulação deve ocorrer antes da apuração."
+            )
+            raise ValueError(msg)
+        sessao.anular(motivo)
         return self.serializar_sessao(id_sessao)
 
     def retomar_sessao(self, id_sessao: str) -> dict[str, Any]:

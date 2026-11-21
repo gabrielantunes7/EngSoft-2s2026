@@ -195,7 +195,8 @@ class TramitacaoLegislativa:
         vencidas as duas Casas, a matéria fica APROVADA. Rejeição em qualquer etapa
         encerra a tramitação como REJEITADA. Quórum insuficiente não é decisão de
         mérito: a sessão entra no histórico como inválida e a etapa se mantém, de modo
-        que uma nova sessão possa ser convocada.
+        que uma nova sessão possa ser convocada. Sessão anulada é recusada com o mesmo
+        efeito sobre a etapa: ela se mantém e outra sessão pode ser convocada.
 
         Args:
             sessao: Sessão convocada por `nova_sessao` para a etapa corrente, já
@@ -207,7 +208,7 @@ class TramitacaoLegislativa:
         Raises:
             TramitacaoInvalidaError: Se a tramitação já foi concluída, se a sessão não
                 foi convocada por esta tramitação para a etapa corrente, se já foi
-                registrada ou se ainda não foi apurada.
+                registrada, se foi anulada ou se ainda não foi apurada.
         """
         self._exigir_em_tramitacao(operacao="registrar resultado")
 
@@ -216,6 +217,13 @@ class TramitacaoLegislativa:
                 f"A sessão '{sessao.id_sessao}' não é a sessão convocada para a etapa "
                 f"corrente da matéria '{self.materia_id}' ({self.id_proxima_sessao}), "
                 "ou já teve seu resultado registrado."
+            )
+            raise TramitacaoInvalidaError(msg)
+        if sessao.estado == EstadoSessao.ANULADA:
+            msg = (
+                f"A sessão '{sessao.id_sessao}' foi anulada ({sessao.motivo_anulacao}) e não "
+                "produz resultado. A etapa se mantém: convoque uma nova sessão com "
+                "nova_sessao()."
             )
             raise TramitacaoInvalidaError(msg)
         if sessao.estado != EstadoSessao.ENCERRADA or sessao.resultado is None:

@@ -24,6 +24,7 @@ class EstadoSessao(StrEnum):
     """Etapas do ciclo de vida de uma sessão, na ordem em que ocorrem.
 
     SUSPENSA é um desvio temporário a partir de EM_VOTACAO, que retorna a ela na retomada.
+    ANULADA é terminal e pode ser alcançada de qualquer etapa posterior à abertura.
     """
 
     CRIADA = "CRIADA"
@@ -32,6 +33,7 @@ class EstadoSessao(StrEnum):
     SUSPENSA = "SUSPENSA"
     EM_APURACAO = "EM_APURACAO"
     ENCERRADA = "ENCERRADA"
+    ANULADA = "ANULADA"
 
 
 class TransicaoInvalidaError(Exception):
@@ -51,7 +53,9 @@ class SessaoVotacao:
 
     A sessão percorre CRIADA → ABERTA → EM_VOTACAO → EM_APURACAO → ENCERRADA, sempre
     nessa ordem. A única volta permitida é a da suspensão: EM_VOTACAO → SUSPENSA →
-    EM_VOTACAO, quantas vezes for preciso, preservando os votos já colhidos. Votos só
+    EM_VOTACAO, quantas vezes for preciso, preservando os votos já colhidos. Uma sessão
+    viciada pode ser anulada de qualquer etapa posterior à abertura: ANULADA é terminal
+    e não produz resultado. Votos só
     são aceitos em EM_VOTACAO, dentro da janela de votação quando ela é definida, e no
     máximo um por eleitor. A apuração só acontece depois que a urna foi fechada.
 
@@ -143,6 +147,7 @@ class SessaoVotacao:
         self._resultado: ResultadoApuracao | None = None
         self._motivo_suspensao: str | None = None
         self._total_suspensoes = 0
+        self._motivo_anulacao: str | None = None
 
     @property
     def log(self) -> LogDeAuditoria | None:
@@ -218,6 +223,11 @@ class SessaoVotacao:
         return self._motivo_suspensao
 
     @property
+    def motivo_anulacao(self) -> str | None:
+        """Motivo da anulação, ou None se a sessão não foi anulada."""
+        return self._motivo_anulacao
+
+    @property
     def total_suspensoes(self) -> int:
         """Quantas vezes a sessão já foi suspensa."""
         return self._total_suspensoes
@@ -258,7 +268,11 @@ class SessaoVotacao:
             ValueError: Se algum identificador for vazio.
             TransicaoInvalidaError: Se a urna já foi fechada (EM_APURACAO ou ENCERRADA).
         """
-        if self._estado in (EstadoSessao.EM_APURACAO, EstadoSessao.ENCERRADA):
+        if self._estado in (
+            EstadoSessao.EM_APURACAO,
+            EstadoSessao.ENCERRADA,
+            EstadoSessao.ANULADA,
+        ):
             msg = (
                 f"Não é possível registrar presença na sessão '{self.id_sessao}': "
                 f"a votação já foi encerrada (estado {self._estado.value})."
@@ -365,6 +379,50 @@ class SessaoVotacao:
             dados={"motivo_da_suspensao": motivo, "total_votos": len(self._votos)},
         )
         self._motivo_suspensao = None
+
+    def anular(self, motivo: str) -> None:
+        """Anula a sessão viciada, registrando o motivo (estado terminal ANULADA).
+
+        A anulação distingue no histórico uma votação inválida de uma válida (D-RITO-04).
+        É possível de qualquer etapa posterior à abertura, inclusive depois da apuração:
+        nesse caso o resultado é descartado. Uma sessão anulada não aceita votos, não é
+        apurada e não pode ser registrada na tramitação.
+
+        Args:
+            motivo: Vício que justifica a anulação, registrado no log de auditoria.
+
+        Raises:
+            ValueError: Se o motivo for vazio.
+            TransicaoInvalidaError: Se a sessão ainda não foi aberta (CRIADA) ou já foi
+                anulada.
+        """
+        if self._estado in (EstadoSessao.CRIADA, EstadoSessao.ANULADA):
+            msg = (
+                f"Não é possível anular a sessão '{self.id_sessao}': "
+                f"estado atual é {self._estado.value}. A anulação vale a partir da abertura "
+                "e só uma vez."
+            )
+            raise TransicaoInvalidaError(msg)
+        motivo_limpo = motivo.strip()
+        if not motivo_limpo:
+            msg = "Informe o motivo da anulação da sessão."
+            raise ValueError(msg)
+
+        estado_anterior = self._estado
+        self._transitar(
+            de=estado_anterior,
+            para=EstadoSessao.ANULADA,
+            evento=TipoEvento.SESSAO_ANULADA,
+            dados={
+                "motivo": motivo_limpo,
+                "estado_anterior": estado_anterior.value,
+                "total_votos": len(self._votos),
+                "resultado_descartado": self._resultado is not None,
+            },
+        )
+        self._motivo_anulacao = motivo_limpo
+        self._motivo_suspensao = None
+        self._resultado = None
 
     def encerrar_votacao(self) -> None:
         """Fecha a urna (EM_VOTACAO → EM_APURACAO)."""

@@ -64,7 +64,7 @@ scripts `schema.sql` e `seeds.sql`.
 | Tela | O que permite fazer |
 | --- | --- |
 | Painel Geral | Ver os indicadores do sistema e consultar a aptidão e o peso do voto de um eleitor |
-| Sessões & Urna | Criar sessões com a regra de cada contexto, conduzir o ciclo de vida (inclusive suspender e retomar), registrar presença no Congresso, votar e apurar |
+| Sessões & Urna | Criar sessões com a regra de cada contexto, conduzir o ciclo de vida (inclusive suspender, retomar e anular), registrar presença no Congresso, votar e apurar |
 | Centro Acadêmico | Cadastrar discentes e chapas |
 | Assembleia S.A. | Cadastrar acionistas, procuradores e candidatos; outorgar e revogar procurações |
 | Congresso & Leis | Protocolar matérias, cadastrar parlamentares e conduzir a tramitação entre as Casas |
@@ -130,7 +130,9 @@ Decisões e padrões principais:
   inclusive abstenções.
 - **Suspensão e retomada da sessão.** A votação pode ser suspensa com motivo e retomada
   quantas vezes for preciso, preservando os votos colhidos e sem estender a janela de
-  votação; as duas transições ficam no log de auditoria.
+  votação; as duas transições ficam no log de auditoria. Uma sessão viciada pode ser
+  anulada com motivo a partir da abertura: ANULADA é terminal, não produz resultado, e a
+  tramitação mantém a etapa para que outra sessão seja convocada.
 - **Sigilo por contexto na interface.** No CA, a UI não expõe votos individuais, parciais,
   nem a opção ou o horário dos registros de voto; na Assembleia e no Congresso, o voto é
   aberto e nominal.
@@ -211,7 +213,6 @@ O fluxo completo está em [CONTRIBUTING.md](CONTRIBUTING.md).
   interface, e o embaralhamento das cédulas no próprio log está no backlog (#28).
 - A tramitação conclui a matéria como aprovada ou rejeitada; emenda pela Casa revisora,
   promulgação, sanção e veto estão no backlog (#33, #34).
-- A anulação de sessão viciada não está implementada (#39).
 
 ## Membros da equipe
 
