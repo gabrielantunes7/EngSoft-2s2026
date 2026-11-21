@@ -14,6 +14,7 @@ from votacao.dados.seeds import BancoDadosMock
 from votacao.fabricas import FabricaAssembleia, FabricaCA, FabricaCongresso
 from votacao.modelos import (
     CasaLegislativa,
+    StatusResultado,
     TipoDecisaoAssembleia,
     TipoMateriaCongresso,
     Voto,
@@ -23,7 +24,7 @@ from votacao.regras.ca import RegraCA
 from votacao.regras.congresso import RegraCongresso
 from votacao.servicos import ServicoElegibilidade
 from votacao.sessao import EstadoSessao, QuorumInstalacaoError, SessaoVotacao
-from votacao.tramitacao import TramitacaoLegislativa
+from votacao.tramitacao import FaseTramitacao, StatusTramitacao, TramitacaoLegislativa
 
 # Política de sigilo por contexto (descoberta D-AUD-04 da Atividade 3): a eleição de
 # CA é secreta; na assembleia o voto é aberto e nominal (Lei das S/A e CVM, história
@@ -374,6 +375,9 @@ class EstadoAplicacaoUI:
             "total_aptos": s.total_aptos,
             "quorum_instalacao": s.quorum_instalacao,
             "total_presentes": s.total_presentes,
+            "motivo_suspensao": s.motivo_suspensao,
+            "total_suspensoes": s.total_suspensoes,
+            "motivo_anulacao": s.motivo_anulacao,
             "inicio_votacao": s.inicio_votacao.isoformat() if s.inicio_votacao else None,
             "fim_votacao": s.fim_votacao.isoformat() if s.fim_votacao else None,
             "total_votos": len(s.votos),
@@ -441,15 +445,19 @@ class EstadoAplicacaoUI:
                 "turno": h.turno,
                 "valida": h.valida,
                 "status_resultado": h.resultado.status.value,
+                "fase": h.fase.value,
+                "com_emenda": h.com_emenda,
+                "texto_prevalecente": (
+                    h.texto_prevalecente.value if h.texto_prevalecente else None
+                ),
                 "decisao": h.resultado.vencedor_ou_decisao,
                 "total_votantes": h.resultado.total_votantes,
                 "contagem_por_opcao": dict(h.resultado.contagem_por_opcao),
             }
             for h in t.historico
         ]
-        concluida = t.status.value in ("APROVADA", "REJEITADA")
-        aprovada = t.status.value == "APROVADA"
-        fase = "CASA_REVISORA" if t.casa_atual == t.casa_revisora else "CASA_INICIADORA"
+        concluida = t.status.concluida
+        aprovada = t.status in (StatusTramitacao.APROVADA, StatusTramitacao.PROMULGADA)
         return {
             "materia_id": t.materia_id,
             "titulo": materia.titulo if materia else t.materia_id,
@@ -457,7 +465,16 @@ class EstadoAplicacaoUI:
             "status": t.status.value,
             "concluida": concluida,
             "aprovada": aprovada,
-            "fase": fase,
+            "fase": t.fase.value,
+            "aceita_emenda": t.aceita_emenda,
+            "razoes_veto": t.razoes_veto,
+            "em_deliberacao": t.status
+            in (StatusTramitacao.EM_TRAMITACAO, StatusTramitacao.VETO_EM_APRECIACAO),
+            "texto_prevalecente": t.texto_prevalecente.value if t.texto_prevalecente else None,
+            "log_rito": [
+                {"evento": r.evento.value, "dados": r.dados, "timestamp": r.timestamp.isoformat()}
+                for r in (t.log.registros if t.log is not None else ())
+            ],
             "casa_iniciadora": t.casa_iniciadora.value,
             "casa_revisora": t.casa_revisora.value,
             "casa_atual": t.casa_atual.value,
@@ -829,6 +846,37 @@ class EstadoAplicacaoUI:
         sessao.registrar_presenca(*ids)
         return self.serializar_sessao(id_sessao)
 
+    def suspender_sessao(self, id_sessao: str, motivo: str) -> dict[str, Any]:
+        """Suspende a votação em curso, preservando os votos já colhidos (#38)."""
+        sessao = self._obter_sessao(id_sessao)
+        sessao.suspender(motivo)
+        return self.serializar_sessao(id_sessao)
+
+    def anular_sessao(self, id_sessao: str, motivo: str) -> dict[str, Any]:
+        """Anula uma sessão viciada, registrando o motivo (#39).
+
+        Na interface, a apuração de uma sessão de tramitação já registra o resultado no
+        rito. Anulá-la depois disso deixaria a matéria avançada por uma sessão anulada,
+        então a anulação só é aceita antes desse registro.
+        """
+        sessao = self._obter_sessao(id_sessao)
+        materia_id = self.metadados_sessoes.get(id_sessao, {}).get("tramitacao_materia_id")
+        tram = self.tramitacoes.get(materia_id) if materia_id else None
+        if tram is not None and any(r.id_sessao == sessao.id_sessao for r in tram.historico):
+            msg = (
+                f"O resultado da sessão '{id_sessao}' já foi registrado na tramitação de "
+                f"{materia_id}; a anulação deve ocorrer antes da apuração."
+            )
+            raise ValueError(msg)
+        sessao.anular(motivo)
+        return self.serializar_sessao(id_sessao)
+
+    def retomar_sessao(self, id_sessao: str) -> dict[str, Any]:
+        """Retoma a votação suspensa, sem estender a janela de votação (#38)."""
+        sessao = self._obter_sessao(id_sessao)
+        sessao.retomar()
+        return self.serializar_sessao(id_sessao)
+
     def abrir_sessao(self, id_sessao: str) -> dict[str, Any]:
         sessao = self._obter_sessao(id_sessao)
         sessao.abrir()
@@ -859,21 +907,37 @@ class EstadoAplicacaoUI:
             self.ancoras_emitidas[id_sessao] = sessao.log.resumo_encerramento()
         return self.serializar_sessao(id_sessao)
 
-    def apurar_sessao(self, id_sessao: str) -> dict[str, Any]:
+    def apurar_sessao(self, id_sessao: str, com_emenda: bool = False) -> dict[str, Any]:
+        """Apura a sessão e, se for de tramitação, registra o resultado no rito.
+
+        `com_emenda` indica que a Casa revisora aprovou a matéria com emendas (#33). É
+        validado antes da apuração, para que uma indicação inválida não deixe a sessão
+        apurada e sem registro; e só se aplica se o resultado for de aprovação.
+        """
         sessao = self._obter_sessao(id_sessao)
+        meta = self.metadados_sessoes.get(id_sessao, {})
+        tramitacao_id = meta.get("tramitacao_materia_id")
+        tram = self.tramitacoes.get(tramitacao_id) if tramitacao_id else None
+        if com_emenda and (tram is None or tram._sessao_convocada is not sessao):
+            msg = "A indicação de emenda só se aplica a sessões de tramitação legislativa."
+            raise ValueError(msg)
+        if com_emenda and tram is not None and not tram.aceita_emenda:
+            msg = (
+                f"A matéria {tramitacao_id} está na fase {tram.fase.value}: apenas a Casa "
+                "revisora emenda o projeto (CF, art. 65)."
+            )
+            raise ValueError(msg)
+
         if sessao.estado == EstadoSessao.EM_VOTACAO:
             sessao.encerrar_votacao()
             if sessao.log is not None:
                 self.ancoras_emitidas[id_sessao] = sessao.log.resumo_encerramento()
 
-        sessao.apurar()
+        resultado = sessao.apurar()
 
-        meta = self.metadados_sessoes.get(id_sessao, {})
-        tramitacao_id = meta.get("tramitacao_materia_id")
-        if tramitacao_id and tramitacao_id in self.tramitacoes:
-            tram = self.tramitacoes[tramitacao_id]
-            if tram._sessao_convocada is sessao:
-                tram.registrar_resultado(sessao)
+        if tram is not None and tram._sessao_convocada is sessao:
+            aprovou = resultado.status == StatusResultado.APROVADO
+            tram.registrar_resultado(sessao, com_emenda=com_emenda and aprovou)
 
         return self.serializar_sessao(id_sessao)
 
@@ -991,9 +1055,29 @@ class EstadoAplicacaoUI:
             tipo=materia.tipo,
             casa_iniciadora=materia.casa_atual,
             repo=self.banco.congresso,
+            log=LogDeAuditoria(materia.id),
         )
         self.tramitacoes[id_limpo] = tram
         return self._serializar_tramitacao(tram)
+
+    def sancionar_tramitacao(self, materia_id: str) -> dict[str, Any]:
+        """Registra a sanção presidencial da lei aprovada (#34)."""
+        tram = self._obter_tramitacao(materia_id)
+        tram.sancionar()
+        return self._serializar_tramitacao(tram)
+
+    def vetar_tramitacao(self, materia_id: str, razoes: str) -> dict[str, Any]:
+        """Registra o veto presidencial e abre a sua apreciação pelo Congresso (#34)."""
+        tram = self._obter_tramitacao(materia_id)
+        tram.vetar(razoes)
+        return self._serializar_tramitacao(tram)
+
+    def _obter_tramitacao(self, materia_id: str) -> TramitacaoLegislativa:
+        id_limpo = materia_id.strip().upper()
+        if id_limpo not in self.tramitacoes:
+            msg = f"Tramitação da matéria '{id_limpo}' não encontrada."
+            raise KeyError(msg)
+        return self.tramitacoes[id_limpo]
 
     def convocar_sessao_tramitacao(
         self,
@@ -1020,6 +1104,12 @@ class EstadoAplicacaoUI:
 
         log = LogDeAuditoria(id_sessao)
         sessao = tram.nova_sessao(log=log)
+        if tram.fase == FaseTramitacao.APRECIACAO_EMENDAS:
+            etapa = "Apreciação das emendas"
+        elif tram.fase == FaseTramitacao.APRECIACAO_VETO:
+            etapa = "Apreciação do veto: SIM derruba o veto"
+        else:
+            etapa = f"{tram.turno_atual}º Turno"
         chave_mapa = id_sessao
 
         aviso: str | None = None
@@ -1032,10 +1122,7 @@ class EstadoAplicacaoUI:
         self.sessoes[chave_mapa] = sessao
         self.metadados_sessoes[chave_mapa] = {
             "contexto": "CONGRESSO",
-            "titulo": (
-                f"{id_limpo} ({tram.casa_atual.value} — {tram.turno_atual}º Turno): "
-                f"{titulo_materia}"
-            ),
+            "titulo": (f"{id_limpo} ({tram.casa_atual.value} — {etapa}): {titulo_materia}"),
             "casa": tram.casa_atual.value,
             "materia": tram.tipo.value,
             "materia_id": id_limpo,
@@ -1065,6 +1152,11 @@ class EstadoAplicacaoUI:
         meta = self.metadados_sessoes.get(id_sessao, {})
         secreto = voto_e_secreto(meta.get("contexto", self._inferir_contexto_regra(sessao.regra)))
         encontrado = sessao.log.contem_protocolo(prot_limpo)
+        # #28: a consulta do eleitor confere o protocolo contra a âncora do encerramento
+        # e responde em linguagem simples, sem opção, peso nem horário do voto.
+        consulta = sessao.log.consultar_comprovante(
+            prot_limpo, ancora=self.ancoras_emitidas.get(id_sessao)
+        )
         registro_detalhe = None
         for r in sessao.log.registros:
             if r.hash == prot_limpo:
@@ -1083,6 +1175,10 @@ class EstadoAplicacaoUI:
             "id_sessao": id_sessao,
             "protocolo": prot_limpo,
             "registro": registro_detalhe,
+            "situacao": consulta.situacao.value,
+            "incluido": consulta.incluido,
+            "mensagem": consulta.mensagem,
+            "instrucao": consulta.instrucao,
         }
 
     def consultar_aptidao_ui(self, dados: dict[str, Any]) -> dict[str, Any]:

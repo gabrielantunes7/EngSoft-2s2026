@@ -217,9 +217,11 @@ def test_auditoria_registra_o_peso_do_voto_ponderado():
     log = criar_log("assembleia-2026")
 
     registro = log.registrar_voto(Voto(eleitor_id="fundo_investimento", opcao="SIM", peso=80000))
+    encerramento = log.registrar(TipoEvento.VOTACAO_ENCERRADA)
 
     assert registro.evento == TipoEvento.VOTO_REGISTRADO
-    assert registro.dados == {"opcao": "SIM", "peso": 80000}
+    # #28: o peso vai com a opção para a cédula publicada no encerramento.
+    assert encerramento.dados["cedulas"] == [["SIM", 80000]]
     assert log.verificar_integridade().integro is True
 
 
@@ -269,7 +271,7 @@ def test_auditoria_confirma_presenca_do_protocolo_do_eleitor():
 def test_auditoria_evento_sem_dados_registra_conteudo_vazio():
     log = criar_log()
 
-    registro = log.registrar(TipoEvento.VOTACAO_ENCERRADA)
+    registro = log.registrar(TipoEvento.VOTACAO_ABERTA)
 
     assert registro.dados == {}
 
@@ -299,10 +301,11 @@ def test_auditoria_permite_reconferir_a_contagem_apurada():
 
     resultado = MotorApuracao.apurar(votos=VOTOS_DA_ELEICAO, regra=regra, total_aptos_ou_capital=10)
     contagem_do_log: dict[str, int] = {}
-    for registro in log.registros:
-        if registro.evento is TipoEvento.VOTO_REGISTRADO:
-            opcao = str(registro.dados["opcao"]).strip().upper()
-            contagem_do_log[opcao] = contagem_do_log.get(opcao, 0) + 1
+    # #28: a recontagem usa as cédulas publicadas no encerramento.
+    encerramento = next(r for r in log.registros if r.evento is TipoEvento.VOTACAO_ENCERRADA)
+    for opcao_bruta, _peso in encerramento.dados["cedulas"]:
+        opcao = str(opcao_bruta).strip().upper()
+        contagem_do_log[opcao] = contagem_do_log.get(opcao, 0) + 1
 
     assert log.verificar_integridade().integro is True
     assert contagem_do_log == resultado.contagem_por_opcao
