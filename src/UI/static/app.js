@@ -81,7 +81,7 @@ function atualizarTodaInterface() {
 function atualizarBadgesEContadores() {
   if (!estadoApp) return;
   const sessoesAtivas = Object.values(estadoApp.sessoes || {}).filter(
-    (s) => s.estado === "EM_VOTACAO" || s.estado === "ABERTA"
+    (s) => ["EM_VOTACAO", "ABERTA", "SUSPENSA"].includes(s.estado)
   ).length;
 
   const badge = document.getElementById("badge-sessoes-ativas");
@@ -312,6 +312,10 @@ function obterBadgeEstado(estado) {
       return `<span class="badge badge-info">🔵 Aberta</span>`;
     case "EM_VOTACAO":
       return `<span class="badge badge-success">🟢 Em Votação</span>`;
+    case "ANULADA":
+      return `<span class="badge badge-danger">⛔ Anulada</span>`;
+    case "SUSPENSA":
+      return `<span class="badge badge-warning">⏸️ Suspensa</span>`;
     case "EM_APURACAO":
       return `<span class="badge badge-warning">🟡 Em Apuração</span>`;
     case "ENCERRADA":
@@ -389,6 +393,10 @@ function renderizarDetalheSessao(idSessao) {
   const podeAbrir = sessao.estado === "CRIADA";
   const podeLiberar = sessao.estado === "ABERTA" || sessao.estado === "CRIADA";
   const podeEncerrar = sessao.estado === "EM_VOTACAO";
+  const podeSuspender = sessao.estado === "EM_VOTACAO";
+  const anulada = sessao.estado === "ANULADA";
+  const podeAnular = !["CRIADA", "ANULADA"].includes(sessao.estado);
+  const suspensa = sessao.estado === "SUSPENSA";
   // Apurar é permitido direto da votação (o servidor encerra antes) ou após o
   // encerramento da urna (EM_APURACAO). Uma sessão ENCERRADA já foi apurada.
   const podeApurar = sessao.estado === "EM_VOTACAO" || sessao.estado === "EM_APURACAO";
@@ -396,8 +404,14 @@ function renderizarDetalheSessao(idSessao) {
   // Stepper visual dos estados: EM_APURACAO deixa a etapa 4 ativa (em andamento)
   // e ENCERRADA a marca como concluída.
   const estados = ["CRIADA", "ABERTA", "EM_VOTACAO", "EM_APURACAO", "ENCERRADA"];
-  const ordemAtual = estados.indexOf(sessao.estado);
-  const rotuloEtapaFinal = sessao.estado === "EM_APURACAO" ? "Em Apuração" : "Encerrada / Apurada";
+  // SUSPENSA é um desvio temporário da etapa de votação (#38): ocupa a etapa 3.
+  const ordemAtual = suspensa ? 2 : estados.indexOf(sessao.estado);
+  const rotuloEtapaVotacao = suspensa ? "Suspensa" : "Em Votação";
+  const rotuloEtapaFinal = anulada
+    ? "⛔ Anulada"
+    : sessao.estado === "EM_APURACAO"
+      ? "Em Apuração"
+      : "Encerrada / Apurada";
 
   const stepperHtml = `
     <div class="session-stepper">
@@ -410,7 +424,7 @@ function renderizarDetalheSessao(idSessao) {
       </div>
       <div class="step-divider"></div>
       <div class="step-item ${ordemAtual >= 2 ? (ordemAtual === 2 ? "active" : "completed") : ""}">
-        <span class="step-dot">${ordemAtual > 2 ? "✓" : "3"}</span> Em Votação
+        <span class="step-dot">${ordemAtual > 2 ? "✓" : suspensa ? "⏸" : "3"}</span> ${rotuloEtapaVotacao}
       </div>
       <div class="step-divider"></div>
       <div class="step-item ${ordemAtual >= 3 ? (ordemAtual === 3 ? "active" : "completed") : ""}">
@@ -434,6 +448,16 @@ function renderizarDetalheSessao(idSessao) {
           A urna só aceita votos quando a sessão estiver no estado <strong>EM_VOTACAO</strong>.
           ${podeLiberar ? "Clique em 'Liberar Votação' abaixo para permitir votos." : ""}
           ${sessao.estado === "EM_APURACAO" ? "Urna fechada: clique em 'Apurar Resultado' para concluir a sessão." : ""}
+          ${
+            anulada
+              ? `Sessão anulada: <strong>${sessao.motivo_anulacao}</strong>. Os votos permanecem no log de auditoria, mas a sessão não produz resultado.`
+              : ""
+          }
+          ${
+            suspensa
+              ? `Sessão suspensa: <strong>${sessao.motivo_suspensao}</strong>. Os ${sessao.total_votos} voto(s) já colhidos estão preservados; retome a sessão para continuar a votação.`
+              : ""
+          }
         </p>
         ${montarReciboVotoHtml(sessao.id_sessao)}
       </div>
@@ -464,9 +488,24 @@ function renderizarDetalheSessao(idSessao) {
         ${podeAbrir ? `<button class="btn btn-secondary btn-sm" onclick="acaoSessao('${sessao.id_sessao}', 'abrir')">▶️ Abrir Sessão</button>` : ""}
         ${podeLiberar ? `<button class="btn btn-primary btn-sm" onclick="acaoSessao('${sessao.id_sessao}', 'liberar')">🔓 Liberar Votação</button>` : ""}
         ${podeEncerrar ? `<button class="btn btn-danger btn-sm" onclick="acaoSessao('${sessao.id_sessao}', 'encerrar')">⏹️ Encerrar Votação</button>` : ""}
+        ${suspensa ? `<button class="btn btn-primary btn-sm" onclick="acaoSessao('${sessao.id_sessao}', 'retomar')">▶️ Retomar Sessão</button>` : ""}
         ${podeApurar ? `<button class="btn btn-success btn-sm" onclick="acaoSessao('${sessao.id_sessao}', 'apurar')">📊 Apurar Resultado</button>` : ""}
       </div>
+      ${
+        podeSuspender
+          ? `
+        <form onsubmit="submeterSuspensao(event, '${sessao.id_sessao}')" style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; margin-bottom: 1.25rem;">
+          <div style="flex: 3; min-width: 200px;">
+            <label for="motivo-suspensao" style="font-size: 0.72rem;">Motivo da suspensão</label>
+            <input type="text" id="motivo-suspensao" placeholder="Ex.: queda de quórum, questão de ordem" />
+          </div>
+          <button type="submit" class="btn btn-secondary btn-sm" style="flex: 1; min-width: 140px;">⏸️ Suspender Sessão</button>
+        </form>
+      `
+          : ""
+      }
 
+      ${montarAnulacaoHtml(sessao, podeAnular)}
       ${montarPainelPresencaHtml(sessao, meta)}
       ${urnaHtml}
       ${apuracaoHtml}
@@ -483,7 +522,7 @@ function renderizarDetalheSessao(idSessao) {
 // voto, e a votação só é liberada com a maioria absoluta da Casa presente (CF, art. 47).
 function montarPainelPresencaHtml(sessao, meta) {
   if (sessao.quorum_instalacao === null || sessao.quorum_instalacao === undefined) return "";
-  const aceitaPresenca = ["CRIADA", "ABERTA", "EM_VOTACAO"].includes(sessao.estado);
+  const aceitaPresenca = ["CRIADA", "ABERTA", "EM_VOTACAO", "SUSPENSA"].includes(sessao.estado);
   const atingido = sessao.total_presentes >= sessao.quorum_instalacao;
   const perc = Math.min(100, (sessao.total_presentes / sessao.quorum_instalacao) * 100).toFixed(1);
   const casa = meta.casa || null;
@@ -532,6 +571,52 @@ function montarPainelPresencaHtml(sessao, meta) {
       }
     </div>
   `;
+}
+
+function montarAnulacaoHtml(sessao, podeAnular) {
+  if (!podeAnular) return "";
+  return `
+    <details style="margin-bottom: 1.25rem;">
+      <summary style="cursor: pointer; font-size: 0.85rem; color: var(--danger);">⛔ Anular sessão viciada</summary>
+      <form onsubmit="submeterAnulacao(event, '${sessao.id_sessao}')" style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; margin-top: 0.5rem;">
+        <div style="flex: 3; min-width: 200px;">
+          <label for="motivo-anulacao" style="font-size: 0.72rem;">Motivo da anulação (vício apurado)</label>
+          <input type="text" id="motivo-anulacao" placeholder="Ex.: eleitor inapto votou, falha no credenciamento" />
+        </div>
+        <button type="submit" class="btn btn-danger btn-sm" style="flex: 1; min-width: 140px;">Anular Sessão</button>
+      </form>
+    </details>
+  `;
+}
+
+async function submeterAnulacao(event, idSessao) {
+  event.preventDefault();
+  const motivo = document.getElementById("motivo-anulacao").value;
+  try {
+    await apiFetch(`/api/sessoes/${encodeURIComponent(idSessao)}/anular`, {
+      method: "POST",
+      body: JSON.stringify({ motivo }),
+    });
+    mostrarToast("Sessão anulada. O motivo ficou registrado no log de auditoria.", "success");
+    await carregarEstadoCompleto();
+  } catch (err) {
+    mostrarToast(`Erro ao anular: ${err.message}`, "error");
+  }
+}
+
+async function submeterSuspensao(event, idSessao) {
+  event.preventDefault();
+  const motivo = document.getElementById("motivo-suspensao").value;
+  try {
+    await apiFetch(`/api/sessoes/${encodeURIComponent(idSessao)}/suspender`, {
+      method: "POST",
+      body: JSON.stringify({ motivo }),
+    });
+    mostrarToast("Sessão suspensa. Os votos já colhidos estão preservados.", "success");
+    await carregarEstadoCompleto();
+  } catch (err) {
+    mostrarToast(`Erro ao suspender: ${err.message}`, "error");
+  }
 }
 
 async function submeterPresenca(event, idSessao) {
