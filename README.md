@@ -16,8 +16,10 @@ usando um único núcleo de software. São atendidos três contextos:
 | **Congresso Nacional** | Deputados e senadores em exercício | 1 por parlamentar | Quórum de instalação de cada Casa; maioria simples (PL), absoluta (PLP) ou 3/5 em dois turnos (PEC), com tramitação bicameral, retorno por emenda e promulgação ou sanção e veto | Nominal |
 
 Cada voto é registrado em um log de auditoria encadeado por SHA-256. O eleitor recebe um
-protocolo que comprova a inclusão do voto, e a comissão guarda uma âncora de encerramento
-que permite detectar qualquer adulteração do log, inclusive uma reescrita completa.
+protocolo que comprova a inclusão do voto sem revelar a opção: o conteúdo dos votos só
+entra no log no encerramento, como cédulas embaralhadas. A comissão guarda uma âncora de
+encerramento que permite detectar qualquer adulteração do log, inclusive uma reescrita
+completa, e o eleitor confere o comprovante contra ela.
 
 ## Como executar
 
@@ -141,9 +143,12 @@ Decisões e padrões principais:
   votação; as duas transições ficam no log de auditoria. Uma sessão viciada pode ser
   anulada com motivo a partir da abertura: ANULADA é terminal, não produz resultado, e a
   tramitação mantém a etapa para que outra sessão seja convocada.
-- **Sigilo por contexto na interface.** No CA, a UI não expõe votos individuais, parciais,
-  nem a opção ou o horário dos registros de voto; na Assembleia e no Congresso, o voto é
-  aberto e nominal.
+- **Comprovante que não revela o voto.** O registro de cada voto guarda só a inclusão,
+  cujo hash é o protocolo; opção e peso entram no log no encerramento, como cédulas em
+  ordem aleatória (`secrets.SystemRandom`) e sem horário. A consulta do comprovante contra
+  a âncora responde, em linguagem simples, se o voto está na urna encerrada.
+- **Sigilo por contexto na interface.** No CA, a UI não expõe votos individuais nem
+  parciais durante a votação; na Assembleia e no Congresso, o voto é aberto e nominal.
 
 ## Estrutura do repositório
 
@@ -217,8 +222,9 @@ O fluxo completo está em [CONTRIBUTING.md](CONTRIBUTING.md).
 - O estado é mantido em memória; não há persistência entre execuções.
 - Não há autenticação real: a interface funciona como console do operador, que escolhe o
   votante, e as identidades vêm de cadastros fictícios.
-- O log de auditoria grava os votos na ordem de chegada. O sigilo no CA é garantido pela
-  interface, e o embaralhamento das cédulas no próprio log está no backlog (#28).
+- O log de auditoria não tem modo nominal: na Assembleia, o mapa de votação identificado
+  vem da sessão, e não da cadeia de hash (#44). A recontagem a partir das cédulas (#29) e
+  o registro de procurações no log (#42) estão no backlog.
 
 ## Membros da equipe
 

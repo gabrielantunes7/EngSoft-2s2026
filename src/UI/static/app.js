@@ -1878,6 +1878,27 @@ async function submeterVerificacaoProtocolo(event, idSessao) {
 
     const box = document.getElementById("resultado-verificacao-protocolo");
     box.style.display = "block";
+    if (res.situacao) {
+      // #28: resposta ao eleitor, conferida contra a âncora do encerramento.
+      const estilos = {
+        INCLUIDO: ["badge-success", "✅"],
+        REGISTRADO_URNA_ABERTA: ["badge-info", "🕒"],
+        NAO_ENCONTRADO: ["badge-danger", "❌"],
+        CADEIA_REPROVADA: ["badge-danger", "⚠️"],
+      };
+      const [classe, icone] = estilos[res.situacao] || ["badge-subtle", "ℹ️"];
+      box.className = `badge ${classe}`;
+      box.style.padding = "0.75rem";
+      box.style.borderRadius = "var(--radius-sm)";
+      box.style.whiteSpace = "normal";
+      box.style.textTransform = "none";
+      box.style.textAlign = "left";
+      box.innerHTML = `
+        <div>${icone} <strong>${res.mensagem}</strong></div>
+        <div style="margin-top: 0.4rem; font-weight: normal;">${res.instrucao}</div>
+      `;
+      return;
+    }
     if (res.encontrado) {
       box.className = "badge badge-success";
       box.style.padding = "0.75rem";

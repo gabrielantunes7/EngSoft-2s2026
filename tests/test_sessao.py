@@ -313,7 +313,8 @@ def test_sessao_emite_comprovante_verificavel_sem_expor_o_eleitor():
     assert log.contem_protocolo(protocolo)
     registro = next(r for r in log.registros if r.hash == protocolo)
     assert registro.evento == TipoEvento.VOTO_REGISTRADO
-    assert registro.dados == {"opcao": "Chapa A", "peso": 1}
+    # #28: o registro do protocolo não guarda a opção; ela vai às cédulas no encerramento.
+    assert registro.dados == {}
     assert "101" not in str(registro.dados)
 
 
@@ -368,7 +369,9 @@ def test_sessao_registra_o_ciclo_completo_no_log():
     ]
 
     encerramento = log.registros[-2]
-    assert encerramento.dados == {"total_votos": 3}
+    # #28: o encerramento publica as cédulas embaralhadas (a ordem não é a de chegada).
+    assert encerramento.dados["total_votos"] == 3
+    assert sorted(encerramento.dados["cedulas"]) == [["Chapa A", 1], ["Chapa A", 1], ["Chapa B", 1]]
 
     proclamacao = log.registros[-1]
     assert proclamacao.dados["status"] == StatusResultado.ELEITO.value
@@ -440,8 +443,11 @@ def test_sessao_audita_o_voto_consolidado_uma_vez_com_o_peso_somado_e_sem_identi
     assert protocolo is not None
     votos_no_log = [r for r in log.registros if r.evento == TipoEvento.VOTO_REGISTRADO]
     assert len(votos_no_log) == 1
-    assert votos_no_log[0].dados == {"opcao": "SIM", "peso": 800}
-    assert "AC-001" not in str(votos_no_log[0].dados)
+    assert votos_no_log[0].dados == {}  # #28: conteúdo só nas cédulas do encerramento
+    sessao.encerrar_votacao()
+    cedulas = log.registros[-1].dados["cedulas"]
+    assert cedulas == [["SIM", 800]]
+    assert "AC-001" not in str(log.registros[-1].dados)
     assert "PROC-101" not in str(votos_no_log[0].dados)
 
 
