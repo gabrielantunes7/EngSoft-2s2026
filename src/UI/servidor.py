@@ -231,7 +231,8 @@ class ManipuladorRequisicoesUI(BaseHTTPRequestHandler):
                 if acao == "encerrar":
                     return HTTPStatus.OK, self.app.encerrar_votacao_sessao(id_sessao)
                 if acao == "apurar":
-                    return HTTPStatus.OK, self.app.apurar_sessao(id_sessao)
+                    com_emenda = bool(corpo.get("com_emenda", False))
+                    return HTTPStatus.OK, self.app.apurar_sessao(id_sessao, com_emenda=com_emenda)
                 if acao == "verificar-protocolo":
                     protocolo = str(corpo.get("protocolo", ""))
                     return HTTPStatus.OK, self.app.verificar_protocolo_auditoria(

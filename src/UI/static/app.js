@@ -394,6 +394,13 @@ function renderizarDetalheSessao(idSessao) {
   const podeLiberar = sessao.estado === "ABERTA" || sessao.estado === "CRIADA";
   const podeEncerrar = sessao.estado === "EM_VOTACAO";
   const podeSuspender = sessao.estado === "EM_VOTACAO";
+  // #33: só a sessão convocada pela tramitação na Casa revisora pode aprovar com emenda.
+  const tramDaSessao = meta.tramitacao_materia_id && estadoApp.tramitacoes
+    ? estadoApp.tramitacoes[meta.tramitacao_materia_id]
+    : null;
+  const aceitaEmenda = Boolean(
+    tramDaSessao && tramDaSessao.aceita_emenda && tramDaSessao.sessao_convocada_id === sessao.id_sessao
+  );
   const anulada = sessao.estado === "ANULADA";
   const podeAnular = !["CRIADA", "ANULADA"].includes(sessao.estado);
   const suspensa = sessao.estado === "SUSPENSA";
@@ -489,7 +496,8 @@ function renderizarDetalheSessao(idSessao) {
         ${podeLiberar ? `<button class="btn btn-primary btn-sm" onclick="acaoSessao('${sessao.id_sessao}', 'liberar')">🔓 Liberar Votação</button>` : ""}
         ${podeEncerrar ? `<button class="btn btn-danger btn-sm" onclick="acaoSessao('${sessao.id_sessao}', 'encerrar')">⏹️ Encerrar Votação</button>` : ""}
         ${suspensa ? `<button class="btn btn-primary btn-sm" onclick="acaoSessao('${sessao.id_sessao}', 'retomar')">▶️ Retomar Sessão</button>` : ""}
-        ${podeApurar ? `<button class="btn btn-success btn-sm" onclick="acaoSessao('${sessao.id_sessao}', 'apurar')">📊 Apurar Resultado</button>` : ""}
+        ${podeApurar && aceitaEmenda ? `<label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.8rem;"><input type="checkbox" id="apurar-com-emenda" /> Aprovação com emendas (Casa revisora)</label>` : ""}
+        ${podeApurar ? `<button class="btn btn-success btn-sm" onclick="apurarSessao('${sessao.id_sessao}')">📊 Apurar Resultado</button>` : ""}
       </div>
       ${
         podeSuspender
@@ -882,6 +890,24 @@ async function submeterSimulacaoPlenario(event, idSessao) {
     await carregarEstadoCompleto();
   } catch (err) {
     mostrarToast(`Erro na simulação de bancada: ${err.message}`, "error");
+  }
+}
+
+async function apurarSessao(idSessao) {
+  const marcador = document.getElementById("apurar-com-emenda");
+  const comEmenda = Boolean(marcador && marcador.checked);
+  try {
+    const res = await apiFetch(`/api/sessoes/${encodeURIComponent(idSessao)}/apurar`, {
+      method: "POST",
+      body: JSON.stringify({ com_emenda: comEmenda }),
+    });
+    const aviso = comEmenda && res.resultado && res.resultado.status === "APROVADO"
+      ? " Aprovada com emendas: a matéria volta à Casa iniciadora."
+      : "";
+    mostrarToast(`Sessão apurada.${aviso}`, "success");
+    await carregarEstadoCompleto();
+  } catch (err) {
+    mostrarToast(`Erro ao apurar: ${err.message}`, "error");
   }
 }
 
@@ -1514,9 +1540,18 @@ function renderizarAbaCongresso() {
           const concluida = t.concluida;
           const statusBadge = concluida
             ? t.aprovada
-              ? `<span class="badge badge-success">APROVADA E PROMULGADA</span>`
+              ? `<span class="badge badge-success">APROVADA</span>`
               : `<span class="badge badge-danger">ARQUIVADA / REJEITADA</span>`
             : `<span class="badge badge-info">EM ANDAMENTO</span>`;
+          const emEmendas = t.fase === "APRECIACAO_EMENDAS";
+          const rotulosFase = {
+            CASA_INICIADORA: "Casa iniciadora",
+            CASA_REVISORA: "Casa revisora",
+            APRECIACAO_EMENDAS: "Apreciação das emendas da revisora (CF, art. 65)",
+          };
+          const textoFinal = t.texto_prevalecente
+            ? `<br />Texto que prevaleceu: <strong>${t.texto_prevalecente === "REVISORA" ? "da revisora (emendas acolhidas)" : "da iniciadora (emendas rejeitadas)"}</strong>`
+            : "";
 
           return `
             <div class="tramitacao-card">
@@ -1528,17 +1563,22 @@ function renderizarAbaCongresso() {
                 ${statusBadge}
               </div>
               <div style="font-size: 0.8rem; color: var(--text-muted);">
-                Casa Atual: <strong>${t.casa_atual}</strong> | Turno: <strong>${t.turno_atual}º</strong>
-                <br />Fase: ${t.fase}
+                Casa Atual: <strong>${t.casa_atual}</strong> | ${emEmendas ? "Sessão única" : `Turno: <strong>${t.turno_atual}º</strong>`}
+                <br />Fase: ${rotulosFase[t.fase] || t.fase}${textoFinal}
               </div>
               <div class="tramitacao-stepper">
                 <span class="tramitacao-stage ${t.fase === "CASA_INICIADORA" ? "active" : "done"}">
                   Iniciadora (${t.casa_iniciadora})
                 </span>
                 <span>➔</span>
-                <span class="tramitacao-stage ${t.fase === "CASA_REVISORA" ? "active" : concluida ? "done" : ""}">
+                <span class="tramitacao-stage ${t.fase === "CASA_REVISORA" ? "active" : concluida || emEmendas ? "done" : ""}">
                   Revisora (${t.casa_revisora})
                 </span>
+                ${
+                  emEmendas || t.texto_prevalecente
+                    ? `<span>➔</span><span class="tramitacao-stage ${emEmendas && !concluida ? "active" : "done"}">Emendas (${t.casa_iniciadora})</span>`
+                    : ""
+                }
               </div>
               ${
                 !concluida

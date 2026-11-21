@@ -363,6 +363,67 @@ class TestEstadoAplicacaoUI:
             app.anular_sessao(id_sessao, "Vício")
         assert app.serializar_sessao(id_sessao)["estado"] == "ENCERRADA"
 
+    @staticmethod
+    def _turno_aprovado(app: EstadoAplicacaoUI, materia: str, com_emenda: bool = False) -> dict:
+        sessao = app.convocar_sessao_tramitacao(materia, liberar_imediatamente=False)["sessao"]
+        id_sessao = sessao["id_sessao"]
+        app.registrar_presenca_sessao(id_sessao, {"bancada": sessao["quorum_instalacao"]})
+        app.liberar_votacao_sessao(id_sessao)
+        app.simular_votacao_plenario(id_sessao, {"votos_sim": sessao["quorum_instalacao"]})
+        return app.apurar_sessao(id_sessao, com_emenda=com_emenda)
+
+    def test_emenda_da_revisora_volta_a_iniciadora_pela_interface(self) -> None:
+        # #33: a revisora aprova com emenda; a iniciadora aprecia as emendas.
+        app = EstadoAplicacaoUI()
+        self._turno_aprovado(app, "PL-101/2026")  # Câmara
+        tram = app._serializar_tramitacao(app.tramitacoes["PL-101/2026"])
+        assert tram["fase"] == "CASA_REVISORA"
+        assert tram["aceita_emenda"] is True
+
+        self._turno_aprovado(app, "PL-101/2026", com_emenda=True)  # Senado emenda
+        tram = app._serializar_tramitacao(app.tramitacoes["PL-101/2026"])
+        assert tram["fase"] == "APRECIACAO_EMENDAS"
+        assert tram["casa_atual"] == "CAMARA"
+        assert tram["id_proxima_sessao"] == "PL-101/2026-CAMARA-EMENDAS"
+        assert tram["historico"][-1]["com_emenda"] is True
+
+        conv = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)
+        assert (
+            "Apreciação das emendas" in app.metadados_sessoes[conv["sessao"]["id_sessao"]]["titulo"]
+        )
+
+        # A iniciadora rejeita as emendas: prevalece o seu texto, e a matéria é aprovada
+        id_emendas = conv["sessao"]["id_sessao"]
+        app.registrar_presenca_sessao(id_emendas, {"bancada": 300})
+        app.liberar_votacao_sessao(id_emendas)
+        app.simular_votacao_plenario(id_emendas, {"votos_sim": 20, "votos_nao": 270})
+        app.apurar_sessao(id_emendas)
+
+        tram = app._serializar_tramitacao(app.tramitacoes["PL-101/2026"])
+        assert tram["status"] == "APROVADA"
+        assert tram["texto_prevalecente"] == "INICIADORA"
+        assert [e["evento"] for e in tram["log_rito"]] == [
+            "TRAMITACAO_CASA_ALTERADA",
+            "TRAMITACAO_CASA_ALTERADA",
+            "TRAMITACAO_CONCLUIDA",
+        ]
+
+    def test_emenda_fora_da_revisora_e_recusada_antes_da_apuracao(self) -> None:
+        app = EstadoAplicacaoUI()
+        sessao = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)[
+            "sessao"
+        ]
+        app.registrar_presenca_sessao(sessao["id_sessao"], {"bancada": 300})
+        app.liberar_votacao_sessao(sessao["id_sessao"])
+
+        with pytest.raises(ValueError, match="apenas a Casa revisora emenda"):
+            app.apurar_sessao(sessao["id_sessao"], com_emenda=True)
+        # A recusa veio antes da apuração: a sessão segue em votação
+        assert app.serializar_sessao(sessao["id_sessao"])["estado"] == "EM_VOTACAO"
+
+        with pytest.raises(ValueError, match="só se aplica a sessões de tramitação"):
+            app.apurar_sessao("ELEICAO-CA-2026", com_emenda=True)
+
     def test_registro_de_presenca_valida_parlamentar_e_casa(self) -> None:
         # #37: só compõem o quórum parlamentares da Casa da sessão e em exercício.
         app = EstadoAplicacaoUI()
