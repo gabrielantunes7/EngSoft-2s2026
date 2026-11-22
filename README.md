@@ -151,6 +151,11 @@ Decisões e padrões principais:
   o log (cédulas do encerramento e total de aptos da abertura), compara com o resultado
   proclamado e aponta as divergências; recusa-se a rodar sobre uma cadeia reprovada. Fica
   num módulo próprio para que a Auditoria não dependa das regras de apuração.
+- **Política de identificação do log por contexto.** O log é sigiloso por padrão e
+  nominal na Assembleia (`PoliticaIdentificacao.NOMINAL`): o voto entra com titular,
+  opção e peso, as cédulas saem na ordem de registro, e `mapa_nominal()` gera o mapa de
+  votação da ata (Lei das S/A, art. 130). A sessão de assembleia recusa votos se o seu
+  log for sigiloso.
 - **Sigilo por contexto na interface.** No CA, a UI não expõe votos individuais nem
   parciais durante a votação; na Assembleia e no Congresso, o voto é aberto e nominal.
 
@@ -227,9 +232,10 @@ O fluxo completo está em [CONTRIBUTING.md](CONTRIBUTING.md).
 - O estado é mantido em memória; não há persistência entre execuções.
 - Não há autenticação real: a interface funciona como console do operador, que escolhe o
   votante, e as identidades vêm de cadastros fictícios.
-- O log de auditoria não tem modo nominal: na Assembleia, o mapa de votação identificado
-  vem da sessão, e não da cadeia de hash (#44). O registro de procurações no log (#42)
-  está no backlog.
+- O voto por procuração aparece no mapa nominal no formato interno
+  `outorgante#rep:procurador`; o registro detalhado de procurações no log (#42) está no
+  backlog. No Congresso, o log segue em modo sigiloso, embora a interface exiba o voto
+  como nominal.
 
 ## Membros da equipe
 

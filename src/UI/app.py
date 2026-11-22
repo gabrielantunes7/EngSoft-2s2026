@@ -6,7 +6,13 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from votacao.auditoria import LogDeAuditoria, RegistroAuditoria, ResumoEncerramento, TipoEvento
+from votacao.auditoria import (
+    LogDeAuditoria,
+    PoliticaIdentificacao,
+    RegistroAuditoria,
+    ResumoEncerramento,
+    TipoEvento,
+)
 from votacao.dados.assembleia import Acionista, CandidatoConselho, Procurador
 from votacao.dados.ca import ChapaCA, Discente
 from votacao.dados.congresso import MateriaLegislativa, Parlamentar
@@ -431,6 +437,10 @@ class EstadoAplicacaoUI:
             "registros": registros,
             "ancora": asdict(ancora) if ancora else None,
             "ancora_json": ancora.para_json() if ancora else None,
+            "politica": log.politica.value,
+            "mapa_nominal": (
+                log.mapa_nominal() if log.politica == PoliticaIdentificacao.NOMINAL else None
+            ),
         }
 
     def _serializar_tramitacao(self, t: TramitacaoLegislativa) -> dict[str, Any]:
@@ -707,7 +717,11 @@ class EstadoAplicacaoUI:
             raise ValueError(msg)
 
         ctx = contexto.strip().upper()
-        log = LogDeAuditoria(id_limpo)
+        # Assembleia: log nominal, exigido pela sessão para aceitar votos (#44).
+        politica = (
+            PoliticaIdentificacao.NOMINAL if ctx == "ASSEMBLEIA" else PoliticaIdentificacao.SIGILOSA
+        )
+        log = LogDeAuditoria(id_limpo, politica=politica)
 
         if ctx == "CA":
             aptos = sum(
