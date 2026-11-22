@@ -1825,6 +1825,20 @@ function renderizarAbaAuditoria() {
       </div>
     </div>
 
+    <!-- Recontagem independente a partir do log (#29) -->
+    ${
+      sessao.estado === "ENCERRADA"
+        ? `
+    <div class="card" style="margin-top: 1rem;">
+      <h4>🧮 Recontagem a partir do log (fiscal)</h4>
+      <p class="card-subtitle">Reapura o resultado usando só as cédulas publicadas no encerramento e compara com o resultado proclamado.</p>
+      <button class="btn btn-secondary btn-sm" style="margin-top: 0.5rem;" onclick="recontarSessao('${idAuditada}')">Recontar e comparar</button>
+      <div id="resultado-recontagem" style="display: none; margin-top: 0.75rem;"></div>
+    </div>
+    `
+        : ""
+    }
+
     <!-- Verificador de Protocolo de Eleitor -->
     <div class="card" style="margin-top: 1rem;">
       <h4>🔍 Verificador Independente de Protocolo de Voto</h4>
@@ -1865,6 +1879,34 @@ function renderizarAbaAuditoria() {
       </div>
     </div>
   `;
+}
+
+async function recontarSessao(idSessao) {
+  const box = document.getElementById("resultado-recontagem");
+  try {
+    const res = await apiFetch(`/api/sessoes/${encodeURIComponent(idSessao)}/recontar`, { method: "POST" });
+    const contagem = Object.entries(res.resultado.contagem_por_opcao)
+      .map(([opcao, votos]) => `${opcao}: <strong>${votos}</strong>`)
+      .join(" | ");
+    const divergencias = Object.entries(res.opcoes_divergentes)
+      .map(([opcao, [recontado, proclamado]]) => `<li>${opcao}: recontado ${recontado}, proclamado ${proclamado}</li>`)
+      .concat(
+        Object.entries(res.campos_divergentes).map(
+          ([campo, [recontado, proclamado]]) => `<li>${campo}: recontado ${recontado}, proclamado ${proclamado}</li>`
+        )
+      )
+      .join("");
+    const veredito = res.confere
+      ? `✅ <strong>Confere:</strong> o resultado proclamado corresponde às cédulas registradas.`
+      : res.confere === false
+        ? `❌ <strong>Não confere:</strong> o resultado proclamado diverge das cédulas.<ul>${divergencias}</ul>`
+        : `ℹ️ Ainda não há resultado proclamado para comparar.`;
+    box.className = `badge ${res.confere ? "badge-success" : res.confere === false ? "badge-danger" : "badge-subtle"}`;
+    box.style.cssText = "display: block; margin-top: 0.75rem; padding: 0.75rem; white-space: normal; text-transform: none; text-align: left;";
+    box.innerHTML = `${veredito}<div style="margin-top: 0.4rem; font-weight: normal;">Recontagem: ${contagem || "sem votos"} — ${res.resultado.status}${res.ancorada ? " (cadeia conferida contra a âncora)" : ""}</div>`;
+  } catch (err) {
+    mostrarToast(`Recontagem recusada: ${err.message}`, "error");
+  }
 }
 
 async function submeterVerificacaoProtocolo(event, idSessao) {

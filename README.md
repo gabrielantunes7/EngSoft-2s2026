@@ -70,7 +70,7 @@ scripts `schema.sql` e `seeds.sql`.
 | Centro Acadêmico | Cadastrar discentes e chapas |
 | Assembleia S.A. | Cadastrar acionistas, procuradores e candidatos; outorgar e revogar procurações |
 | Congresso & Leis | Protocolar matérias, cadastrar parlamentares, conduzir a tramitação entre as Casas (inclusive emendas) e registrar sanção ou veto |
-| Auditoria SHA-256 | Inspecionar a cadeia de registros, a âncora de encerramento e verificar um protocolo |
+| Auditoria SHA-256 | Inspecionar a cadeia de registros e a âncora de encerramento, verificar um protocolo e recontar o resultado a partir do log |
 
 ### Uso como biblioteca
 
@@ -107,7 +107,7 @@ componentes, está no relatório da Atividade 4.
 | Apresentação | `UI/` | Servidor HTTP com API REST e interface web; não contém regra de negócio |
 | Orquestração do rito | `tramitacao.py` | Conduz uma matéria pela Casa iniciadora e pela revisora, com 1 ou 2 turnos por Casa |
 | Condução e autorização do voto | `sessao.py`, `servicos.py`, `procuracoes.py`, `fabricas/`, `elegibilidade/` | Máquina de estados da sessão; autenticação, aptidão e peso do voto; procurações; criação das famílias de componentes de cada contexto |
-| Regras de domínio | `regras/`, `motor.py`, `auditoria.py`, `observadores.py` | Quórum e apuração de cada contexto; log de auditoria encadeado |
+| Regras de domínio | `regras/`, `motor.py`, `auditoria.py`, `recontagem.py`, `observadores.py` | Quórum e apuração de cada contexto; log de auditoria encadeado e recontagem a partir dele |
 | Acesso a dados | `dados/` | Cadastros em memória dos três contextos, com espelho relacional em SQLite |
 | Base | `modelos.py` | Modelos de domínio compartilhados (`Voto`, `ResultadoApuracao`, enums) |
 
@@ -147,6 +147,10 @@ Decisões e padrões principais:
   cujo hash é o protocolo; opção e peso entram no log no encerramento, como cédulas em
   ordem aleatória (`secrets.SystemRandom`) e sem horário. A consulta do comprovante contra
   a âncora responde, em linguagem simples, se o voto está na urna encerrada.
+- **Recontagem independente.** `votacao.recontagem.recontar` reapura o resultado usando só
+  o log (cédulas do encerramento e total de aptos da abertura), compara com o resultado
+  proclamado e aponta as divergências; recusa-se a rodar sobre uma cadeia reprovada. Fica
+  num módulo próprio para que a Auditoria não dependa das regras de apuração.
 - **Sigilo por contexto na interface.** No CA, a UI não expõe votos individuais nem
   parciais durante a votação; na Assembleia e no Congresso, o voto é aberto e nominal.
 
@@ -163,6 +167,7 @@ Decisões e padrões principais:
 │   │   ├── sessao.py             # Ciclo de vida da sessão de votação
 │   │   ├── tramitacao.py         # Rito bicameral do Congresso
 │   │   ├── auditoria.py          # Log encadeado por SHA-256 e âncora de encerramento
+│   │   ├── recontagem.py         # Recontagem do resultado a partir do log
 │   │   ├── observadores.py       # Observer dos eventos da sessão
 │   │   ├── procuracoes.py        # Procurações e poder de voto consolidado
 │   │   ├── servicos.py           # Autenticação, aptidão e autorização do voto
@@ -223,8 +228,8 @@ O fluxo completo está em [CONTRIBUTING.md](CONTRIBUTING.md).
 - Não há autenticação real: a interface funciona como console do operador, que escolhe o
   votante, e as identidades vêm de cadastros fictícios.
 - O log de auditoria não tem modo nominal: na Assembleia, o mapa de votação identificado
-  vem da sessão, e não da cadeia de hash (#44). A recontagem a partir das cédulas (#29) e
-  o registro de procurações no log (#42) estão no backlog.
+  vem da sessão, e não da cadeia de hash (#44). O registro de procurações no log (#42)
+  está no backlog.
 
 ## Membros da equipe
 
