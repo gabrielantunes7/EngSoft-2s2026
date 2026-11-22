@@ -155,7 +155,9 @@ Decisões e padrões principais:
   nominal na Assembleia (`PoliticaIdentificacao.NOMINAL`): o voto entra com titular,
   opção e peso, as cédulas saem na ordem de registro, e `mapa_nominal()` gera o mapa de
   votação da ata (Lei das S/A, art. 130). A sessão de assembleia recusa votos se o seu
-  log for sigiloso.
+  log for sigiloso. No voto por procuração, o registro discrimina o procurador, as ações
+  próprias e cada outorgante com o peso e a procuração; `consultar_outorgante()` mostra
+  onde as ações de um acionista foram computadas, e cotas já computadas são recusadas.
 - **Sigilo por contexto na interface.** No CA, a UI não expõe votos individuais nem
   parciais durante a votação; na Assembleia e no Congresso, o voto é aberto e nominal.
 
@@ -232,10 +234,9 @@ O fluxo completo está em [CONTRIBUTING.md](CONTRIBUTING.md).
 - O estado é mantido em memória; não há persistência entre execuções.
 - Não há autenticação real: a interface funciona como console do operador, que escolhe o
   votante, e as identidades vêm de cadastros fictícios.
-- O voto por procuração aparece no mapa nominal no formato interno
-  `outorgante#rep:procurador`; o registro detalhado de procurações no log (#42) está no
-  backlog. No Congresso, o log segue em modo sigiloso, embora a interface exiba o voto
-  como nominal.
+- No Congresso, o log segue em modo sigiloso, embora a interface exiba o voto como
+  nominal. A irrepetibilidade de matéria rejeitada na mesma sessão legislativa (#35) está
+  no backlog.
 
 ## Membros da equipe
 

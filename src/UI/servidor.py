@@ -248,6 +248,9 @@ class ManipuladorRequisicoesUI(BaseHTTPRequestHandler):
                 if acao == "apurar":
                     com_emenda = bool(corpo.get("com_emenda", False))
                     return HTTPStatus.OK, self.app.apurar_sessao(id_sessao, com_emenda=com_emenda)
+                if acao == "consultar-outorgante":
+                    acionista = str(corpo.get("outorgante_id", ""))
+                    return HTTPStatus.OK, self.app.consultar_outorgante_sessao(id_sessao, acionista)
                 if acao == "recontar":
                     return HTTPStatus.OK, self.app.recontar_sessao(id_sessao)
                 if acao == "verificar-protocolo":
