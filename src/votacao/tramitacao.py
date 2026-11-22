@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import ClassVar
 
@@ -31,6 +31,7 @@ class StatusTramitacao(StrEnum):
     APROVADA = "APROVADA"
     PROMULGADA = "PROMULGADA"
     REJEITADA = "REJEITADA"
+    ARQUIVADA = "ARQUIVADA"
 
     @property
     def concluida(self) -> bool:
@@ -39,6 +40,7 @@ class StatusTramitacao(StrEnum):
             StatusTramitacao.APROVADA,
             StatusTramitacao.PROMULGADA,
             StatusTramitacao.REJEITADA,
+            StatusTramitacao.ARQUIVADA,
         )
 
 
@@ -60,6 +62,20 @@ class TextoPrevalecente(StrEnum):
 
 class TramitacaoInvalidaError(Exception):
     """Operação incompatível com a situação da tramitação ou com a etapa corrente."""
+
+
+class MateriaIrrepetivelError(ValueError):
+    """Reapresentação de matéria rejeitada vedada na mesma sessão legislativa (#35)."""
+
+
+def sessao_legislativa_corrente(momento: datetime | None = None) -> int:
+    """Sessão legislativa do instante dado, identificada pelo ano.
+
+    A sessão legislativa é o período anual de funcionamento do Congresso, de 2 de
+    fevereiro a 17 de julho e de 1º de agosto a 22 de dezembro (CF, art. 57). Não se
+    confunde com a sessão de votação nem com a reunião de Plenário.
+    """
+    return (momento or datetime.now(UTC)).year
 
 
 @dataclass(frozen=True)
@@ -136,6 +152,8 @@ class TramitacaoLegislativa:
         casa_iniciadora: CasaLegislativa = CasaLegislativa.CAMARA,
         repo: RepositorioCongresso | None = None,
         log: LogDeAuditoria | None = None,
+        sessao_legislativa: int | None = None,
+        proposta_maioria_absoluta: bool = False,
     ) -> None:
         """Inicia a tramitação no primeiro turno da Casa iniciadora.
 
@@ -148,11 +166,18 @@ class TramitacaoLegislativa:
                 Casa iniciadora.
             log: Log de auditoria do rito. Precisa ter sido criado com o identificador
                 da matéria.
+            sessao_legislativa: Sessão legislativa (ano, CF art. 57) em que a matéria
+                tramita. O padrão é a do ano corrente.
+            proposta_maioria_absoluta: Reapresentação de projeto de lei rejeitado na mesma
+                sessão legislativa mediante proposta da maioria absoluta dos membros de
+                qualquer das Casas (CF, art. 67). Não se aplica a PEC (art. 60, § 5º).
 
         Raises:
             ValueError: Se o identificador da matéria for vazio, se o cadastro no
                 repositório divergir dos parâmetros informados ou se o log pertencer a
                 outra matéria.
+            MateriaIrrepetivelError: Se a matéria foi rejeitada na mesma sessão
+                legislativa e a reapresentação não é admitida (arts. 60, § 5º e 67).
         """
         if not materia_id.strip():
             msg = "O identificador da matéria não pode ser vazio."
@@ -175,8 +200,14 @@ class TramitacaoLegislativa:
         self._texto_prevalecente: TextoPrevalecente | None = None
         self._razoes_veto: str | None = None
         self.log = log
+        self.sessao_legislativa = (
+            sessao_legislativa if sessao_legislativa is not None else sessao_legislativa_corrente()
+        )
+        self.proposta_maioria_absoluta = proposta_maioria_absoluta
+        self._motivo_arquivamento: str | None = None
 
         if repo is not None:
+            self._admitir_reapresentacao(repo)
             self._conferir_cadastro(repo)
 
     @property
@@ -196,6 +227,38 @@ class TramitacaoLegislativa:
             self._status == StatusTramitacao.EM_TRAMITACAO
             and self._fase == FaseTramitacao.CASA_REVISORA
         )
+
+    @property
+    def motivo_arquivamento(self) -> str | None:
+        """Motivo da retirada de pauta, ou None se a matéria não foi arquivada assim."""
+        return self._motivo_arquivamento
+
+    def retirar_de_pauta(self, motivo: str) -> StatusTramitacao:
+        """Arquiva a matéria por decisão explícita, sem decisão de mérito.
+
+        A retirada não é rejeição: a matéria arquivada assim não fica sujeita à
+        irrepetibilidade dos arts. 60, § 5º e 67, e pode voltar a tramitar.
+
+        Args:
+            motivo: Razão da retirada (ex.: requerimento do autor, perda de objeto).
+
+        Raises:
+            ValueError: Se o motivo for vazio.
+            TramitacaoInvalidaError: Se a matéria não estiver em tramitação.
+        """
+        if self._status != StatusTramitacao.EM_TRAMITACAO:
+            msg = (
+                f"Não é possível retirar de pauta a matéria '{self.materia_id}' "
+                f"(situação {self._status.value}): só a matéria em tramitação sai de pauta."
+            )
+            raise TramitacaoInvalidaError(msg)
+        motivo_limpo = motivo.strip()
+        if not motivo_limpo:
+            msg = "Informe o motivo da retirada de pauta."
+            raise ValueError(msg)
+        self._motivo_arquivamento = motivo_limpo
+        self._concluir(StatusTramitacao.ARQUIVADA, decisao="RETIRADA_DE_PAUTA")
+        return self._status
 
     @property
     def razoes_veto(self) -> str | None:
@@ -544,7 +607,15 @@ class TramitacaoLegislativa:
 
     def _concluir(self, status: StatusTramitacao, decisao: str | None = None) -> None:
         self._status = status
-        self._sincronizar_cadastro(ativa=False)
+        arquivamento = {
+            StatusTramitacao.REJEITADA: "REJEITADA",
+            StatusTramitacao.ARQUIVADA: "RETIRADA",
+        }.get(status, "CONCLUIDA")
+        self._sincronizar_cadastro(
+            ativa=False,
+            arquivamento=arquivamento,
+            sessao_legislativa_arquivamento=self.sessao_legislativa,
+        )
         dados: dict[str, str] = {"status": status.value, "casa": self._casa_atual.value}
         if decisao is not None:
             dados["decisao"] = decisao
@@ -567,6 +638,47 @@ class TramitacaoLegislativa:
                 f"não está em deliberação no Congresso (situação {self._status.value})."
             )
             raise TramitacaoInvalidaError(msg)
+
+    def _admitir_reapresentacao(self, repo: RepositorioCongresso) -> None:
+        """Aplica a irrepetibilidade e reativa no cadastro a matéria reapresentável.
+
+        "A matéria constante de proposta de emenda rejeitada ou havida por prejudicada
+        não pode ser objeto de nova proposta na mesma sessão legislativa" (CF, art. 60,
+        § 5º). Já o projeto de lei rejeitado "somente poderá constituir objeto de novo
+        projeto, na mesma sessão legislativa, mediante proposta da maioria absoluta dos
+        membros de qualquer das Casas" (art. 67). A sessão legislativa é a do art. 57.
+        Matéria retirada de pauta não foi rejeitada e pode voltar a tramitar.
+        """
+        materia = repo.obter_materia(self.materia_id)
+        if materia is None or materia.ativa or materia.arquivamento is None:
+            return
+        if materia.arquivamento == "CONCLUIDA":
+            return  # concluída com aprovação: _conferir_cadastro recusa como arquivada
+        mesma_sessao = materia.sessao_legislativa_arquivamento == self.sessao_legislativa
+        if materia.arquivamento == "REJEITADA" and mesma_sessao:
+            if self.tipo == TipoMateriaCongresso.PEC:
+                msg = (
+                    f"A PEC '{self.materia_id}' foi rejeitada na sessão legislativa de "
+                    f"{self.sessao_legislativa} e não pode ser objeto de nova proposta na "
+                    "mesma sessão legislativa (CF, art. 60, § 5º)."
+                )
+                raise MateriaIrrepetivelError(msg)
+            if not self.proposta_maioria_absoluta:
+                msg = (
+                    f"O projeto '{self.materia_id}' foi rejeitado na sessão legislativa de "
+                    f"{self.sessao_legislativa}: só volta nesta sessão mediante proposta da "
+                    "maioria absoluta dos membros de qualquer das Casas (CF, art. 67)."
+                )
+                raise MateriaIrrepetivelError(msg)
+        repo.adicionar_materia(
+            replace(
+                materia,
+                ativa=True,
+                casa_atual=self.casa_iniciadora,
+                arquivamento=None,
+                sessao_legislativa_arquivamento=None,
+            )
+        )
 
     def _conferir_cadastro(self, repo: RepositorioCongresso) -> None:
         materia = repo.obter_materia(self.materia_id)
@@ -593,15 +705,24 @@ class TramitacaoLegislativa:
         self,
         casa_atual: CasaLegislativa | None = None,
         ativa: bool | None = None,
+        arquivamento: str | None = None,
+        sessao_legislativa_arquivamento: int | None = None,
     ) -> None:
         if self.repo is None:
             return
         materia = self.repo.obter_materia(self.materia_id)
         if materia is None:
             return
-        alteracoes: dict[str, CasaLegislativa | bool] = {}
+        alteracoes: dict[str, object] = {}
         if casa_atual is not None:
             alteracoes["casa_atual"] = casa_atual
         if ativa is not None:
             alteracoes["ativa"] = ativa
+        if ativa is True:
+            alteracoes["arquivamento"] = None
+            alteracoes["sessao_legislativa_arquivamento"] = None
+        if arquivamento is not None:
+            alteracoes["arquivamento"] = arquivamento
+        if sessao_legislativa_arquivamento is not None:
+            alteracoes["sessao_legislativa_arquivamento"] = sessao_legislativa_arquivamento
         self.repo.adicionar_materia(replace(materia, **alteracoes))

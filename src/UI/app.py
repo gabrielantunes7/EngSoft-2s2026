@@ -479,6 +479,8 @@ class EstadoAplicacaoUI:
             "fase": t.fase.value,
             "aceita_emenda": t.aceita_emenda,
             "razoes_veto": t.razoes_veto,
+            "sessao_legislativa": t.sessao_legislativa,
+            "motivo_arquivamento": t.motivo_arquivamento,
             "em_deliberacao": t.status
             in (StatusTramitacao.EM_TRAMITACAO, StatusTramitacao.VETO_EM_APRECIACAO),
             "texto_prevalecente": t.texto_prevalecente.value if t.texto_prevalecente else None,
@@ -1058,21 +1060,39 @@ class EstadoAplicacaoUI:
     # TRAMITAÇÃO LEGISLATIVA BICAMERAL
     # =========================================================================
 
-    def iniciar_tramitacao(self, materia_id: str) -> dict[str, Any]:
+    def iniciar_tramitacao(
+        self, materia_id: str, proposta_maioria_absoluta: bool = False
+    ) -> dict[str, Any]:
+        """Inicia (ou reapresenta) a tramitação da matéria na sessão legislativa corrente.
+
+        A reapresentação de matéria rejeitada segue a irrepetibilidade (#35): PEC não volta
+        na mesma sessão legislativa; projeto de lei só volta com a proposta da maioria
+        absoluta do art. 67.
+        """
         id_limpo = materia_id.strip().upper()
         materia = self.banco.congresso.obter_materia(id_limpo)
         if materia is None:
             msg = f"Matéria '{id_limpo}' não encontrada no cadastro do Congresso."
             raise ValueError(msg)
 
+        # Na reapresentação, a matéria volta à Casa em que começou, não à que a rejeitou.
+        anterior = self.tramitacoes.get(id_limpo)
+        casa_iniciadora = anterior.casa_iniciadora if anterior else materia.casa_atual
         tram = TramitacaoLegislativa(
             materia_id=materia.id,
             tipo=materia.tipo,
-            casa_iniciadora=materia.casa_atual,
+            casa_iniciadora=casa_iniciadora,
             repo=self.banco.congresso,
             log=LogDeAuditoria(materia.id),
+            proposta_maioria_absoluta=proposta_maioria_absoluta,
         )
         self.tramitacoes[id_limpo] = tram
+        return self._serializar_tramitacao(tram)
+
+    def retirar_tramitacao_de_pauta(self, materia_id: str, motivo: str) -> dict[str, Any]:
+        """Arquiva a matéria sem decisão de mérito (#35)."""
+        tram = self._obter_tramitacao(materia_id)
+        tram.retirar_de_pauta(motivo)
         return self._serializar_tramitacao(tram)
 
     def sancionar_tramitacao(self, materia_id: str) -> dict[str, Any]:

@@ -138,6 +138,10 @@ Decisões e padrões principais:
   sanção (CF, art. 60, § 3º). O projeto de lei vai à sanção; vetado, o veto é apreciado
   com maioria absoluta exigida em cada Casa, em votação aberta (art. 66, § 4º, e EC
   76/2013): derrubado, a lei está aprovada; mantido, a matéria é rejeitada.
+- **Irrepetibilidade e retirada de pauta.** A tramitação identifica a sessão legislativa
+  (CF, art. 57). A PEC rejeitada não volta na mesma sessão legislativa (art. 60, § 5º);
+  o projeto de lei rejeitado só volta com proposta da maioria absoluta (art. 67). A
+  matéria pode ser retirada de pauta sem decisão de mérito, e nesse caso pode voltar.
 - **Suspensão e retomada da sessão.** A votação pode ser suspensa com motivo e retomada
   quantas vezes for preciso, preservando os votos colhidos e sem estender a janela de
   votação; as duas transições ficam no log de auditoria. Uma sessão viciada pode ser
@@ -235,8 +239,9 @@ O fluxo completo está em [CONTRIBUTING.md](CONTRIBUTING.md).
 - Não há autenticação real: a interface funciona como console do operador, que escolhe o
   votante, e as identidades vêm de cadastros fictícios.
 - No Congresso, o log segue em modo sigiloso, embora a interface exiba o voto como
-  nominal. A irrepetibilidade de matéria rejeitada na mesma sessão legislativa (#35) está
-  no backlog.
+  nominal.
+- A irrepetibilidade consulta o cadastro da matéria: uma tramitação criada sem
+  repositório não tem histórico de rejeições a verificar.
 
 ## Membros da equipe
 

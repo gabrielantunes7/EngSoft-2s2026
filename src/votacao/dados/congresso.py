@@ -55,6 +55,11 @@ class MateriaLegislativa:
         casa_atual: Casa onde a votação da matéria está ocorrendo (CAMARA ou SENADO).
         titulo: Ementa ou resumo do projeto de lei/emenda.
         ativa: Indica se a matéria está pautada para deliberação na sessão.
+        arquivamento: Por que a matéria saiu de pauta: 'REJEITADA', 'RETIRADA' ou
+            'CONCLUIDA' (aprovada, promulgada ou sancionada); None se nunca foi arquivada
+            pela tramitação (#35).
+        sessao_legislativa_arquivamento: Sessão legislativa (ano, CF art. 57) em que a
+            matéria foi arquivada; base da irrepetibilidade dos arts. 60, § 5º e 67.
     """
 
     id: str
@@ -62,6 +67,8 @@ class MateriaLegislativa:
     casa_atual: CasaLegislativa
     titulo: str = ""
     ativa: bool = True
+    arquivamento: str | None = None
+    sessao_legislativa_arquivamento: int | None = None
 
     def __post_init__(self) -> None:
         if not self.id.strip():
