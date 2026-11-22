@@ -13,6 +13,7 @@ import pytest
 
 from UI.app import EstadoAplicacaoUI
 from UI.servidor import criar_servidor
+from votacao.recontagem import RecontagemRecusadaError
 from votacao.sessao import EstadoSessao, VotoRecusadoError
 from votacao.tramitacao import TramitacaoInvalidaError
 
@@ -252,6 +253,26 @@ class TestEstadoAplicacaoUI:
             ["CHAPA FUTURO", 1],
             ["CHAPA FUTURO", 1],
         ]
+
+    def test_recontagem_pela_interface(self) -> None:
+        # #29: depois da apuração, a recontagem a partir do log confere com a proclamação.
+        app = EstadoAplicacaoUI()
+        for ra, chapa in (("247314", "Chapa Renova"), ("242352", "Chapa Futuro")):
+            app.registrar_voto_na_sessao("ELEICAO-CA-2026", {"eleitor_id": ra, "opcao": chapa})
+
+        with pytest.raises(RecontagemRecusadaError, match="encerramento"):
+            app.recontar_sessao("ELEICAO-CA-2026")
+
+        app.apurar_sessao("ELEICAO-CA-2026")
+        recontagem = app.recontar_sessao("ELEICAO-CA-2026")
+
+        assert recontagem["confere"] is True
+        assert recontagem["ancorada"] is True
+        assert recontagem["resultado"]["contagem_por_opcao"] == {
+            "CHAPA RENOVA": 1,
+            "CHAPA FUTURO": 1,
+        }
+        assert recontagem["opcoes_divergentes"] == {}
 
     def test_voto_aberto_e_nominal_na_assembleia(self) -> None:
         # Na assembleia societária o voto é aberto (Lei das S/A, história #44).
