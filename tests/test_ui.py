@@ -290,10 +290,16 @@ class TestEstadoAplicacaoUI:
         registro = next(
             r for r in sessao["auditoria"]["registros"] if r["evento"] == "VOTO_REGISTRADO"
         )
-        # #28: o log guarda a inclusão do voto sem o conteúdo, em todos os contextos; o
-        # mapa nominal vem da sessão. O registro nominal no próprio log é a história #44.
-        assert registro["dados"] == {}
+        # #44: na assembleia o log é nominal: titular, opção e peso em claro.
+        assert registro["dados"] == {"eleitor_id": "AC-002", "opcao": "SIM", "peso": 300000}
         assert registro["timestamp"] is not None
+        assert sessao["auditoria"]["politica"] == "NOMINAL"
+        assert sessao["auditoria"]["mapa_nominal"] == [registro["dados"]]
+
+        # No CA, o log continua sigiloso e sem mapa nominal
+        ca = app.serializar_sessao("ELEICAO-CA-2026")["auditoria"]
+        assert ca["politica"] == "SIGILOSA"
+        assert ca["mapa_nominal"] is None
 
     def test_fluxo_voto_societario_com_procuracao(self) -> None:
         app = EstadoAplicacaoUI()

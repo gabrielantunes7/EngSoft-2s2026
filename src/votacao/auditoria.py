@@ -123,6 +123,18 @@ class RegistroAuditoria:
         return hashlib.sha256(conteudo.encode("utf-8")).hexdigest()
 
 
+class PoliticaIdentificacao(StrEnum):
+    """Política de identificação do voto no log, conforme o contexto (D-AUD-04).
+
+    SIGILOSA (padrão): o voto entra sem conteúdo nem eleitor, e as cédulas são publicadas
+    embaralhadas no encerramento (#28). NOMINAL: o voto entra com eleitor, opção e peso,
+    como exigem a Lei das S/A (art. 130) e a CVM para o mapa de votação das assembleias.
+    """
+
+    SIGILOSA = "SIGILOSA"
+    NOMINAL = "NOMINAL"
+
+
 class SituacaoComprovante(StrEnum):
     """Resposta da consulta de um comprovante de voto."""
 
@@ -246,6 +258,7 @@ class LogDeAuditoria:
         id_votacao: str,
         relogio: Callable[[], datetime] | None = None,
         aleatorio: random.Random | None = None,
+        politica: PoliticaIdentificacao = PoliticaIdentificacao.SIGILOSA,
     ) -> None:
         """Inicializa um log vazio.
 
@@ -256,6 +269,8 @@ class LogDeAuditoria:
             aleatorio: Fonte aleatória usada para embaralhar as cédulas no encerramento.
                 O padrão é `secrets.SystemRandom`, imprevisível; injetar uma fonte com
                 semente torna o embaralhamento reprodutível nos testes.
+            politica: Política de identificação do voto. SIGILOSA (padrão) para
+                eleições secretas; NOMINAL para deliberações de voto aberto (#44).
 
         Raises:
             ValueError: Se o identificador da votação for vazio.
@@ -267,6 +282,7 @@ class LogDeAuditoria:
         self.id_votacao = id_votacao
         self._relogio = relogio if relogio is not None else lambda: datetime.now(UTC)
         self._aleatorio = aleatorio if aleatorio is not None else secrets.SystemRandom()
+        self.politica = politica
         self._registros: list[RegistroAuditoria] = []
         # Cédulas guardadas fora da cadeia até o encerramento, quando são publicadas
         # embaralhadas. Nunca contêm o eleitor nem a ordem de chegada depois de publicadas.
@@ -339,14 +355,50 @@ class LogDeAuditoria:
         Returns:
             O registro criado, cujo hash é o comprovante entregue ao eleitor.
         """
-        registro = self.registrar(TipoEvento.VOTO_REGISTRADO, {})
+        if self.politica == PoliticaIdentificacao.NOMINAL:
+            # Voto aberto (#44): titular, opção e peso em claro, para o mapa da ata.
+            dados: dict[str, Any] = {
+                "eleitor_id": voto.eleitor_id,
+                "opcao": voto.opcao,
+                "peso": voto.peso,
+            }
+            if voto.representados:
+                dados["representados"] = list(voto.representados)
+            registro = self.registrar(TipoEvento.VOTO_REGISTRADO, dados)
+        else:
+            registro = self.registrar(TipoEvento.VOTO_REGISTRADO, {})
         self._cedulas_pendentes.append([voto.opcao, voto.peso])
         return registro
 
+    def mapa_nominal(self) -> list[dict[str, Any]]:
+        """Mapa de votação para a ata: cada titular com a sua opção e o seu peso.
+
+        Returns:
+            Um item por voto, na ordem de registro, com `eleitor_id`, `opcao` e `peso`
+            (e `representados`, nos votos consolidados por procuração).
+
+        Raises:
+            ValueError: Se o log for sigiloso, caso em que não há mapa nominal.
+        """
+        if self.politica != PoliticaIdentificacao.NOMINAL:
+            msg = (
+                f"O log da votação '{self.id_votacao}' é sigiloso: não guarda a "
+                "identificação dos votantes e não tem mapa nominal."
+            )
+            raise ValueError(msg)
+        return [
+            deepcopy(r.dados) for r in self._registros if r.evento == TipoEvento.VOTO_REGISTRADO
+        ]
+
     def _publicar_cedulas(self) -> list[list[Any]]:
-        """Embaralha e entrega as cédulas guardadas desde o último encerramento."""
+        """Entrega as cédulas guardadas desde o último encerramento.
+
+        No modo sigiloso, embaralhadas; no nominal, na ordem de registro, pois a ligação
+        entre titular e voto já é pública e deve ser preservada (RNF-AUD-08).
+        """
         cedulas = list(self._cedulas_pendentes)
-        self._aleatorio.shuffle(cedulas)
+        if self.politica == PoliticaIdentificacao.SIGILOSA:
+            self._aleatorio.shuffle(cedulas)
         self._cedulas_pendentes = []
         return cedulas
 

@@ -1778,10 +1778,18 @@ function renderizarAbaAuditoria() {
   const sessoes = Object.values(estadoApp.sessoes || {});
   const seletor = document.getElementById("auditoria-seletor-sessao");
   if (seletor) {
+    // Preserva a sessão escolhida no próprio seletor; sem escolha válida, usa a sessão
+    // aberta na aba de Sessões. Antes, cada redesenho voltava à sessão selecionada lá,
+    // e não era possível auditar outra pelo seletor.
+    const escolhida = seletor.value;
     seletor.innerHTML = sessoes
       .map((s) => `<option value="${s.id_sessao}">${s.id_sessao}</option>`)
       .join("");
-    if (sessaoSelecionadaId) seletor.value = sessaoSelecionadaId;
+    if (escolhida && estadoApp.sessoes[escolhida]) {
+      seletor.value = escolhida;
+    } else if (sessaoSelecionadaId) {
+      seletor.value = sessaoSelecionadaId;
+    }
   }
 
   const idAuditada = seletor ? seletor.value : sessaoSelecionadaId;
@@ -1849,6 +1857,30 @@ function renderizarAbaAuditoria() {
       </form>
       <div id="resultado-verificacao-protocolo" style="display: none; margin-top: 0.75rem;"></div>
     </div>
+
+    <!-- Mapa nominal de votação para a ata (#44) -->
+    ${
+      audit.mapa_nominal
+        ? `
+    <div class="card" style="margin-top: 1rem;">
+      <h4>📜 Mapa de votação para a ata (voto aberto e nominal)</h4>
+      <p class="card-subtitle">Exigido em assembleias pela Lei das S/A (art. 130) e pela CVM: cada titular, a sua opção e o peso das suas ações, extraídos do log de auditoria.</p>
+      ${
+        audit.mapa_nominal.length
+          ? `<table class="data-table" style="margin-top: 0.5rem;">
+              <thead><tr><th>Titular</th><th>Opção</th><th>Peso (ações)</th><th>Representados</th></tr></thead>
+              <tbody>${audit.mapa_nominal
+                .map(
+                  (m) => `<tr><td>${m.eleitor_id}</td><td>${m.opcao}</td><td>${m.peso}</td><td>${(m.representados || []).join(", ") || "—"}</td></tr>`
+                )
+                .join("")}</tbody>
+            </table>`
+          : `<p class="text-muted">Nenhum voto registrado ainda.</p>`
+      }
+    </div>
+    `
+        : ""
+    }
 
     <!-- Lista de Blocos da Cadeia -->
     <div class="card" style="margin-top: 1rem;">
