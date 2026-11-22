@@ -1868,13 +1868,27 @@ function renderizarAbaAuditoria() {
       ${
         audit.mapa_nominal.length
           ? `<table class="data-table" style="margin-top: 0.5rem;">
-              <thead><tr><th>Titular</th><th>Opção</th><th>Peso (ações)</th><th>Representados</th></tr></thead>
+              <thead><tr><th>Votante</th><th>Opção</th><th>Peso total</th><th>Ações próprias e representadas (#42)</th></tr></thead>
               <tbody>${audit.mapa_nominal
-                .map(
-                  (m) => `<tr><td>${m.eleitor_id}</td><td>${m.opcao}</td><td>${m.peso}</td><td>${(m.representados || []).join(", ") || "—"}</td></tr>`
-                )
+                .map((m) => {
+                  const votante = m.procurador_id || m.eleitor_id;
+                  const composicao = m.representacoes
+                    ? [
+                        m.peso_proprio ? `próprias: ${m.peso_proprio}` : "sem ações próprias",
+                        ...m.representacoes.map(
+                          (r) => `${r.outorgante_id}: ${r.peso} <small>(${r.procuracao_id})</small>`
+                        ),
+                      ].join("<br />")
+                    : "voto direto";
+                  return `<tr><td>${votante}${m.representacoes ? " <small>(procurador)</small>" : ""}</td><td>${m.opcao}</td><td>${m.peso}</td><td>${composicao}</td></tr>`;
+                })
                 .join("")}</tbody>
-            </table>`
+            </table>
+            <form onsubmit="consultarOutorgante(event, '${idAuditada}')" style="display: flex; gap: 0.5rem; margin-top: 0.75rem; flex-wrap: wrap;">
+              <input type="text" id="consulta-outorgante-id" placeholder="Acionista (ex.: AC-001)" style="flex: 1; min-width: 160px;" />
+              <button type="submit" class="btn btn-secondary btn-sm">Onde minhas ações foram computadas?</button>
+            </form>
+            <div id="resultado-consulta-outorgante" style="display: none; margin-top: 0.5rem;"></div>`
           : `<p class="text-muted">Nenhum voto registrado ainda.</p>`
       }
     </div>
@@ -1911,6 +1925,31 @@ function renderizarAbaAuditoria() {
       </div>
     </div>
   `;
+}
+
+async function consultarOutorgante(event, idSessao) {
+  event.preventDefault();
+  const outorganteId = document.getElementById("consulta-outorgante-id").value;
+  const box = document.getElementById("resultado-consulta-outorgante");
+  try {
+    const res = await apiFetch(`/api/sessoes/${encodeURIComponent(idSessao)}/consultar-outorgante`, {
+      method: "POST",
+      body: JSON.stringify({ outorgante_id: outorganteId }),
+    });
+    box.style.display = "block";
+    box.innerHTML = res.ocorrencias.length
+      ? res.ocorrencias
+          .map(
+            (o) =>
+              `✅ ${res.outorgante_id}: <strong>${o.peso}</strong> ações em <strong>${o.opcao}</strong>, ` +
+              (o.procuracao_id ? `votadas por ${o.votante} (${o.procuracao_id})` : "voto direto") +
+              ` — bloco #${o.indice}`
+          )
+          .join("<br />")
+      : `ℹ️ As ações de ${res.outorgante_id} não foram computadas nesta votação.`;
+  } catch (err) {
+    mostrarToast(`Erro na consulta: ${err.message}`, "error");
+  }
 }
 
 async function recontarSessao(idSessao) {

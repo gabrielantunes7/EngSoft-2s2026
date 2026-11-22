@@ -41,6 +41,29 @@ class CasaLegislativa(StrEnum):
 
 
 @dataclass(frozen=True)
+class Representacao:
+    """Fração do voto de um procurador que pertence a um acionista representado (#42).
+
+    Attributes:
+        outorgante_id: Acionista que delegou o voto.
+        peso: Ações do outorgante computadas neste voto.
+        procuracao_id: Identificador da procuração que fundamenta a representação.
+    """
+
+    outorgante_id: str
+    peso: int
+    procuracao_id: str
+
+    def __post_init__(self) -> None:
+        if not self.outorgante_id.strip() or not self.procuracao_id.strip():
+            msg = "A representação precisa do outorgante e da procuração."
+            raise ValueError(msg)
+        if self.peso <= 0:
+            msg = "O peso de uma representação deve ser positivo."
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True)
 class Voto:
     """Representa um voto individual registrado no sistema.
 
@@ -52,6 +75,10 @@ class Voto:
         representados: Identificadores dos acionistas cujo capital foi consolidado neste voto
             por procuração (Assembleia), inclusive o do próprio emissor quando as suas
             ações entram no voto. Vazio nos votos individuais.
+        representacoes: Detalhamento das ações delegadas que o voto carrega: outorgante,
+            peso e procuração de cada um (#42). Vazio nos votos sem procuração.
+        peso_proprio: Ações do próprio votante incluídas no voto, quando ele vota por
+            procuração (0 se o procurador não tem ações próprias). None nos votos diretos.
     """
 
     eleitor_id: str
@@ -59,6 +86,8 @@ class Voto:
     peso: int = 1
     timestamp: datetime | None = None
     representados: tuple[str, ...] = ()
+    representacoes: tuple[Representacao, ...] = ()
+    peso_proprio: int | None = None
 
     def __post_init__(self) -> None:
         if self.peso <= 0:
@@ -73,6 +102,21 @@ class Voto:
         if any(not representado.strip() for representado in self.representados):
             msg = "Os identificadores dos representados não podem ser vazios."
             raise ValueError(msg)
+        if self.representacoes:
+            if self.peso_proprio is None or self.peso_proprio < 0:
+                msg = "Voto por procuração deve informar o peso próprio do votante (>= 0)."
+                raise ValueError(msg)
+            soma = self.peso_proprio + sum(r.peso for r in self.representacoes)
+            if soma != self.peso:
+                msg = (
+                    f"O peso do voto ({self.peso}) difere do peso próprio somado ao dos "
+                    f"representados ({soma})."
+                )
+                raise ValueError(msg)
+            outorgantes = [r.outorgante_id for r in self.representacoes]
+            if len(set(outorgantes)) != len(outorgantes):
+                msg = "Um mesmo outorgante não pode ser representado duas vezes no voto."
+                raise ValueError(msg)
 
 
 @dataclass(frozen=True)

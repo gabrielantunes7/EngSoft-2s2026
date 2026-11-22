@@ -1196,6 +1196,22 @@ class EstadoAplicacaoUI:
             "instrucao": consulta.instrucao,
         }
 
+    def consultar_outorgante_sessao(self, id_sessao: str, outorgante_id: str) -> dict[str, Any]:
+        """Onde as ações de um acionista foram computadas, no log nominal da sessão (#42)."""
+        sessao = self._obter_sessao(id_sessao)
+        if sessao.log is None:
+            msg = f"A sessão '{id_sessao}' não tem log de auditoria."
+            raise ValueError(msg)
+        acionista = outorgante_id.strip()
+        if not acionista:
+            msg = "Informe o identificador do acionista."
+            raise ValueError(msg)
+        return {
+            "id_sessao": id_sessao,
+            "outorgante_id": acionista,
+            "ocorrencias": sessao.log.consultar_outorgante(acionista),
+        }
+
     def recontar_sessao(self, id_sessao: str) -> dict[str, Any]:
         """Reapura a sessão só a partir do log e compara com a proclamação (#29)."""
         sessao = self._obter_sessao(id_sessao)

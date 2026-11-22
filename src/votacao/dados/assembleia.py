@@ -57,6 +57,15 @@ class Procuracao:
     data_expiracao: datetime | None = None
     ativa: bool = True
 
+    @property
+    def identificador(self) -> str:
+        """Identificador da procuração, derivado do par outorgante e procurador.
+
+        Basta para distinguir o instrumento: um outorgante tem no máximo uma procuração
+        vigente por vez (ServicoProcuracao.cadastrar).
+        """
+        return f"PROC:{self.outorgante_id}>{self.procurador_id}"
+
     def __post_init__(self) -> None:
         if not self.outorgante_id.strip():
             msg = "O outorgante da procuração não pode ser vazio."
