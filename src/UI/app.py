@@ -1041,8 +1041,13 @@ class EstadoAplicacaoUI:
         tram = self.tramitacoes[id_limpo]
         id_sessao = tram.id_proxima_sessao
         if id_sessao in self.sessoes:
-            # Arquiva sessão anterior do mesmo turno (ex.: inválida por falta de quórum)
-            sufixo = len(tram.historico)
+            # Arquiva a sessão anterior do mesmo turno (sem quórum ou anulada) sob o
+            # primeiro número de tentativa livre. O tamanho do histórico não serve de
+            # contador: a sessão anulada não entra nele, e duas anulações seguidas
+            # gerariam a mesma chave, sobrescrevendo a primeira (#39).
+            sufixo = 1
+            while f"{id_sessao}-TENTATIVA-{sufixo}" in self.sessoes:
+                sufixo += 1
             chave_antiga = f"{id_sessao}-TENTATIVA-{sufixo}"
             sessao_antiga = self.sessoes.pop(id_sessao)
             sessao_antiga.id_sessao = chave_antiga

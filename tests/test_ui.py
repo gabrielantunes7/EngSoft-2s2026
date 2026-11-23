@@ -349,6 +349,30 @@ class TestEstadoAplicacaoUI:
         tentativas = [s for s in app.sessoes if "TENTATIVA" in s]
         assert [app.serializar_sessao(t)["estado"] for t in tentativas] == ["ANULADA"]
 
+    def test_anulacoes_seguidas_no_mesmo_turno_preservam_todas_as_tentativas(self) -> None:
+        # Revisão do PR #70: a sessão anulada não entra no histórico da tramitação, e a
+        # chave da tentativa arquivada não pode depender dele.
+        app = EstadoAplicacaoUI()
+        anuladas = []
+        for motivo in ("Painel com defeito", "Quórum fraudado", "Erro de pauta"):
+            sessao = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)[
+                "sessao"
+            ]
+            app.abrir_sessao(sessao["id_sessao"])
+            app.anular_sessao(sessao["id_sessao"], motivo)
+            anuladas.append(motivo)
+        app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)
+
+        tentativas = sorted(s for s in app.sessoes if "TENTATIVA" in s)
+        assert tentativas == [
+            "PL-101/2026-CAMARA-T1-TENTATIVA-1",
+            "PL-101/2026-CAMARA-T1-TENTATIVA-2",
+            "PL-101/2026-CAMARA-T1-TENTATIVA-3",
+        ]
+        motivos = [app.serializar_sessao(t)["motivo_anulacao"] for t in tentativas]
+        assert motivos == anuladas
+        assert all(t in app.metadados_sessoes for t in tentativas)
+
     def test_anulacao_recusada_depois_do_registro_na_tramitacao(self) -> None:
         app = EstadoAplicacaoUI()
         id_sessao = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)[
