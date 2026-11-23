@@ -205,3 +205,37 @@ def test_sem_repositorio_nao_ha_historico_para_aplicar_a_irrepetibilidade():
     tramitacao = TramitacaoLegislativa("PL-4", PL, sessao_legislativa=2026)
 
     assert tramitacao.status == StatusTramitacao.EM_TRAMITACAO
+
+
+# --- Revisão do PR #79: a trava não pode ser contornada --------------------------------
+
+
+def test_pec_rejeitada_apresentada_como_lei_continua_recusada_e_mantem_o_registro():
+    repo = _rejeitada("PEC-5/2026", PEC)
+
+    # Tipo errado + maioria absoluta: antes, passava pela trava, reativava a matéria e só
+    # depois falhava, apagando o registro da rejeição.
+    with pytest.raises(MateriaIrrepetivelError, match=r"art\. 60, § 5º"):
+        TramitacaoLegislativa(
+            "PEC-5/2026", PL, repo=repo, sessao_legislativa=2026, proposta_maioria_absoluta=True
+        )
+
+    materia = repo.obter_materia("PEC-5/2026")
+    assert (materia.ativa, materia.arquivamento) == (False, "REJEITADA")
+    with pytest.raises(MateriaIrrepetivelError):
+        TramitacaoLegislativa("PEC-5/2026", PEC, repo=repo, sessao_legislativa=2026)
+
+
+def test_falha_na_conferencia_do_cadastro_nao_apaga_o_registro_da_rejeicao():
+    repo = _rejeitada("PL-6/2026", PL, sessao=2026)
+
+    # Sessão posterior (a reapresentação seria admitida), mas o tipo diverge do cadastro.
+    with pytest.raises(ValueError, match="cadastrada como LEI_ORDINARIA"):
+        TramitacaoLegislativa("PL-6/2026", PEC, repo=repo, sessao_legislativa=2027)
+
+    materia = repo.obter_materia("PL-6/2026")
+    assert materia.ativa is False
+    assert materia.arquivamento == "REJEITADA"
+    assert materia.sessao_legislativa_arquivamento == 2026
+    with pytest.raises(MateriaIrrepetivelError, match=r"art\. 67"):
+        TramitacaoLegislativa("PL-6/2026", PL, repo=repo, sessao_legislativa=2026)

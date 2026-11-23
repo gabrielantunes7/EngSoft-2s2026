@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import ClassVar
 
 from votacao.auditoria import LogDeAuditoria, TipoEvento
-from votacao.dados.congresso import RepositorioCongresso
+from votacao.dados.congresso import MateriaLegislativa, RepositorioCongresso
 from votacao.fabricas.congresso import FabricaCongresso
 from votacao.modelos import (
     CasaLegislativa,
@@ -207,8 +207,14 @@ class TramitacaoLegislativa:
         self._motivo_arquivamento: str | None = None
 
         if repo is not None:
-            self._admitir_reapresentacao(repo)
-            self._conferir_cadastro(repo)
+            # Nada é gravado no cadastro antes de todas as validações passarem: se o
+            # registro da rejeição fosse apagado e a criação falhasse em seguida, a
+            # irrepetibilidade ficaria contornável (revisão do PR #79).
+            materia = repo.obter_materia(materia_id)
+            reativada = self._admitir_reapresentacao(materia)
+            self._conferir_cadastro(reativada if reativada is not None else materia)
+            if reativada is not None:
+                repo.adicionar_materia(reativada)
 
     @property
     def status(self) -> StatusTramitacao:
@@ -639,8 +645,10 @@ class TramitacaoLegislativa:
             )
             raise TramitacaoInvalidaError(msg)
 
-    def _admitir_reapresentacao(self, repo: RepositorioCongresso) -> None:
-        """Aplica a irrepetibilidade e reativa no cadastro a matéria reapresentável.
+    def _admitir_reapresentacao(
+        self, materia: MateriaLegislativa | None
+    ) -> MateriaLegislativa | None:
+        """Aplica a irrepetibilidade e calcula a matéria reativada, sem gravá-la.
 
         "A matéria constante de proposta de emenda rejeitada ou havida por prejudicada
         não pode ser objeto de nova proposta na mesma sessão legislativa" (CF, art. 60,
@@ -648,15 +656,22 @@ class TramitacaoLegislativa:
         projeto, na mesma sessão legislativa, mediante proposta da maioria absoluta dos
         membros de qualquer das Casas" (art. 67). A sessão legislativa é a do art. 57.
         Matéria retirada de pauta não foi rejeitada e pode voltar a tramitar.
+
+        A trava usa o tipo do cadastro, e não o informado por quem chama: uma PEC
+        rejeitada não escapa do art. 60, § 5º sendo apresentada como projeto de lei.
+
+        Returns:
+            A matéria reativada (ativa, na Casa iniciadora e sem registro de
+            arquivamento), a ser gravada só depois da conferência do cadastro; ou None se
+            não há reapresentação a admitir.
         """
-        materia = repo.obter_materia(self.materia_id)
         if materia is None or materia.ativa or materia.arquivamento is None:
-            return
+            return None
         if materia.arquivamento == "CONCLUIDA":
-            return  # concluída com aprovação: _conferir_cadastro recusa como arquivada
+            return None  # concluída com aprovação: _conferir_cadastro recusa como arquivada
         mesma_sessao = materia.sessao_legislativa_arquivamento == self.sessao_legislativa
         if materia.arquivamento == "REJEITADA" and mesma_sessao:
-            if self.tipo == TipoMateriaCongresso.PEC:
+            if materia.tipo == TipoMateriaCongresso.PEC:
                 msg = (
                     f"A PEC '{self.materia_id}' foi rejeitada na sessão legislativa de "
                     f"{self.sessao_legislativa} e não pode ser objeto de nova proposta na "
@@ -670,18 +685,15 @@ class TramitacaoLegislativa:
                     "maioria absoluta dos membros de qualquer das Casas (CF, art. 67)."
                 )
                 raise MateriaIrrepetivelError(msg)
-        repo.adicionar_materia(
-            replace(
-                materia,
-                ativa=True,
-                casa_atual=self.casa_iniciadora,
-                arquivamento=None,
-                sessao_legislativa_arquivamento=None,
-            )
+        return replace(
+            materia,
+            ativa=True,
+            casa_atual=self.casa_iniciadora,
+            arquivamento=None,
+            sessao_legislativa_arquivamento=None,
         )
 
-    def _conferir_cadastro(self, repo: RepositorioCongresso) -> None:
-        materia = repo.obter_materia(self.materia_id)
+    def _conferir_cadastro(self, materia: MateriaLegislativa | None) -> None:
         if materia is None:
             msg = f"A matéria '{self.materia_id}' não está cadastrada no repositório."
             raise ValueError(msg)
