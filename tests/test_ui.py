@@ -274,6 +274,32 @@ class TestEstadoAplicacaoUI:
         }
         assert recontagem["opcoes_divergentes"] == {}
 
+    def test_procuracao_no_log_e_consulta_por_outorgante(self) -> None:
+        # #42: o mapa discrimina os representados; o outorgante confere as suas ações.
+        app = EstadoAplicacaoUI()
+        app.registrar_voto_na_sessao(
+            "AGE-2026-01",
+            {
+                "eleitor_id": "AC-001",
+                "procurador_id": "PROC-101",
+                "opcao": "SIM",
+                "modo": "PROCURACAO",
+            },
+        )
+
+        mapa = app.serializar_sessao("AGE-2026-01")["auditoria"]["mapa_nominal"]
+        assert mapa[0]["procurador_id"] == "PROC-101"
+        assert mapa[0]["representacoes"] == [
+            {"outorgante_id": "AC-001", "peso": 500_000, "procuracao_id": "PROC:AC-001>PROC-101"}
+        ]
+
+        consulta = app.consultar_outorgante_sessao("AGE-2026-01", "AC-001")
+        assert consulta["ocorrencias"][0]["votante"] == "PROC-101"
+        assert consulta["ocorrencias"][0]["peso"] == 500_000
+        assert app.consultar_outorgante_sessao("AGE-2026-01", "AC-005")["ocorrencias"] == []
+        with pytest.raises(ValueError, match="sigiloso"):
+            app.consultar_outorgante_sessao("ELEICAO-CA-2026", "247314")
+
     def test_voto_aberto_e_nominal_na_assembleia(self) -> None:
         # Na assembleia societária o voto é aberto (Lei das S/A, história #44).
         app = EstadoAplicacaoUI()

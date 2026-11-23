@@ -237,6 +237,11 @@ class ResumoEncerramento:
             raise ValueError(msg) from erro
 
 
+def _votante(voto: Voto) -> str:
+    """Quem emitiu o voto: no voto por procuração 'outorgante#rep:procurador', o procurador."""
+    return voto.eleitor_id.split("#rep:", 1)[-1]
+
+
 class LogDeAuditoria:
     """Cadeia de registros de auditoria de uma votação.
 
@@ -283,6 +288,8 @@ class LogDeAuditoria:
         self._relogio = relogio if relogio is not None else lambda: datetime.now(UTC)
         self._aleatorio = aleatorio if aleatorio is not None else secrets.SystemRandom()
         self.politica = politica
+        # Titulares cujas cotas já entraram em algum voto do log nominal (#42).
+        self._titulares_computados: set[str] = set()
         self._registros: list[RegistroAuditoria] = []
         # Cédulas guardadas fora da cadeia até o encerramento, quando são publicadas
         # embaralhadas. Nunca contêm o eleitor nem a ordem de chegada depois de publicadas.
@@ -356,6 +363,14 @@ class LogDeAuditoria:
             O registro criado, cujo hash é o comprovante entregue ao eleitor.
         """
         if self.politica == PoliticaIdentificacao.NOMINAL:
+            titulares = self._titulares_do_voto(voto)
+            repetidos = sorted(titulares & self._titulares_computados)
+            if repetidos:
+                msg = (
+                    f"Duplicidade: as cotas do acionista '{repetidos[0]}' já foram computadas "
+                    f"na votação '{self.id_votacao}', diretamente ou por procuração."
+                )
+                raise ValueError(msg)
             # Voto aberto (#44): titular, opção e peso em claro, para o mapa da ata.
             dados: dict[str, Any] = {
                 "eleitor_id": voto.eleitor_id,
@@ -364,11 +379,88 @@ class LogDeAuditoria:
             }
             if voto.representados:
                 dados["representados"] = list(voto.representados)
+            if voto.representacoes:
+                # #42: quem votou, as próprias ações e cada mandato exercido, em ordem
+                # determinística; tudo entra no hash do registro (RNF-AUD-06).
+                dados["procurador_id"] = _votante(voto)
+                dados["peso_proprio"] = voto.peso_proprio
+                dados["representacoes"] = [
+                    {
+                        "outorgante_id": r.outorgante_id,
+                        "peso": r.peso,
+                        "procuracao_id": r.procuracao_id,
+                    }
+                    for r in sorted(voto.representacoes, key=lambda r: r.outorgante_id)
+                ]
             registro = self.registrar(TipoEvento.VOTO_REGISTRADO, dados)
+            self._titulares_computados |= titulares
         else:
             registro = self.registrar(TipoEvento.VOTO_REGISTRADO, {})
         self._cedulas_pendentes.append([voto.opcao, voto.peso])
         return registro
+
+    @staticmethod
+    def _titulares_do_voto(voto: Voto) -> set[str]:
+        """Acionistas cujas cotas o voto consome: o votante (se tem peso próprio) e os
+        representados."""
+        if voto.representacoes:
+            titulares = {r.outorgante_id for r in voto.representacoes}
+            if voto.peso_proprio:
+                titulares.add(_votante(voto))
+            return titulares
+        if voto.representados:
+            return set(voto.representados)
+        return {voto.eleitor_id}
+
+    def consultar_outorgante(self, outorgante_id: str) -> list[dict[str, Any]]:
+        """Onde as ações de um acionista foram computadas no log nominal (#42).
+
+        Permite ao outorgante ausente conferir que o seu procurador computou as suas
+        ações, e à Mesa auditar a delegação.
+
+        Args:
+            outorgante_id: Acionista a consultar.
+
+        Returns:
+            Um item por voto em que as ações dele entraram, com o índice do registro, quem
+            votou (`votante`), o peso dele computado, a opção e, se por procuração, o
+            identificador da procuração. Lista vazia se as ações dele não foram computadas.
+
+        Raises:
+            ValueError: Se o log for sigiloso.
+        """
+        if self.politica != PoliticaIdentificacao.NOMINAL:
+            msg = f"O log da votação '{self.id_votacao}' é sigiloso: não há consulta nominal."
+            raise ValueError(msg)
+        ocorrencias: list[dict[str, Any]] = []
+        for registro in self._registros:
+            if registro.evento != TipoEvento.VOTO_REGISTRADO:
+                continue
+            dados = registro.dados
+            for rep in dados.get("representacoes", []):
+                if rep["outorgante_id"] == outorgante_id:
+                    ocorrencias.append(
+                        {
+                            "indice": registro.indice,
+                            "votante": dados["procurador_id"],
+                            "peso": rep["peso"],
+                            "opcao": dados["opcao"],
+                            "procuracao_id": rep["procuracao_id"],
+                        }
+                    )
+            votante = dados.get("procurador_id", dados.get("eleitor_id"))
+            peso_direto = dados.get("peso_proprio", dados["peso"])
+            if votante == outorgante_id and peso_direto:
+                ocorrencias.append(
+                    {
+                        "indice": registro.indice,
+                        "votante": outorgante_id,
+                        "peso": peso_direto,
+                        "opcao": dados["opcao"],
+                        "procuracao_id": None,
+                    }
+                )
+        return ocorrencias
 
     def mapa_nominal(self) -> list[dict[str, Any]]:
         """Mapa de votação para a ata: cada titular com a sua opção e o seu peso.
