@@ -376,6 +376,7 @@ class EstadoAplicacaoUI:
             "total_presentes": s.total_presentes,
             "motivo_suspensao": s.motivo_suspensao,
             "total_suspensoes": s.total_suspensoes,
+            "motivo_anulacao": s.motivo_anulacao,
             "inicio_votacao": s.inicio_votacao.isoformat() if s.inicio_votacao else None,
             "fim_votacao": s.fim_votacao.isoformat() if s.fim_votacao else None,
             "total_votos": len(s.votos),
@@ -837,6 +838,25 @@ class EstadoAplicacaoUI:
         sessao.suspender(motivo)
         return self.serializar_sessao(id_sessao)
 
+    def anular_sessao(self, id_sessao: str, motivo: str) -> dict[str, Any]:
+        """Anula uma sessão viciada, registrando o motivo (#39).
+
+        Na interface, a apuração de uma sessão de tramitação já registra o resultado no
+        rito. Anulá-la depois disso deixaria a matéria avançada por uma sessão anulada,
+        então a anulação só é aceita antes desse registro.
+        """
+        sessao = self._obter_sessao(id_sessao)
+        materia_id = self.metadados_sessoes.get(id_sessao, {}).get("tramitacao_materia_id")
+        tram = self.tramitacoes.get(materia_id) if materia_id else None
+        if tram is not None and any(r.id_sessao == sessao.id_sessao for r in tram.historico):
+            msg = (
+                f"O resultado da sessão '{id_sessao}' já foi registrado na tramitação de "
+                f"{materia_id}; a anulação deve ocorrer antes da apuração."
+            )
+            raise ValueError(msg)
+        sessao.anular(motivo)
+        return self.serializar_sessao(id_sessao)
+
     def retomar_sessao(self, id_sessao: str) -> dict[str, Any]:
         """Retoma a votação suspensa, sem estender a janela de votação (#38)."""
         sessao = self._obter_sessao(id_sessao)
@@ -1021,8 +1041,13 @@ class EstadoAplicacaoUI:
         tram = self.tramitacoes[id_limpo]
         id_sessao = tram.id_proxima_sessao
         if id_sessao in self.sessoes:
-            # Arquiva sessão anterior do mesmo turno (ex.: inválida por falta de quórum)
-            sufixo = len(tram.historico)
+            # Arquiva a sessão anterior do mesmo turno (sem quórum ou anulada) sob o
+            # primeiro número de tentativa livre. O tamanho do histórico não serve de
+            # contador: a sessão anulada não entra nele, e duas anulações seguidas
+            # gerariam a mesma chave, sobrescrevendo a primeira (#39).
+            sufixo = 1
+            while f"{id_sessao}-TENTATIVA-{sufixo}" in self.sessoes:
+                sufixo += 1
             chave_antiga = f"{id_sessao}-TENTATIVA-{sufixo}"
             sessao_antiga = self.sessoes.pop(id_sessao)
             sessao_antiga.id_sessao = chave_antiga

@@ -312,6 +312,8 @@ function obterBadgeEstado(estado) {
       return `<span class="badge badge-info">🔵 Aberta</span>`;
     case "EM_VOTACAO":
       return `<span class="badge badge-success">🟢 Em Votação</span>`;
+    case "ANULADA":
+      return `<span class="badge badge-danger">⛔ Anulada</span>`;
     case "SUSPENSA":
       return `<span class="badge badge-warning">⏸️ Suspensa</span>`;
     case "EM_APURACAO":
@@ -392,6 +394,8 @@ function renderizarDetalheSessao(idSessao) {
   const podeLiberar = sessao.estado === "ABERTA" || sessao.estado === "CRIADA";
   const podeEncerrar = sessao.estado === "EM_VOTACAO";
   const podeSuspender = sessao.estado === "EM_VOTACAO";
+  const anulada = sessao.estado === "ANULADA";
+  const podeAnular = !["CRIADA", "ANULADA"].includes(sessao.estado);
   const suspensa = sessao.estado === "SUSPENSA";
   // Apurar é permitido direto da votação (o servidor encerra antes) ou após o
   // encerramento da urna (EM_APURACAO). Uma sessão ENCERRADA já foi apurada.
@@ -403,7 +407,11 @@ function renderizarDetalheSessao(idSessao) {
   // SUSPENSA é um desvio temporário da etapa de votação (#38): ocupa a etapa 3.
   const ordemAtual = suspensa ? 2 : estados.indexOf(sessao.estado);
   const rotuloEtapaVotacao = suspensa ? "Suspensa" : "Em Votação";
-  const rotuloEtapaFinal = sessao.estado === "EM_APURACAO" ? "Em Apuração" : "Encerrada / Apurada";
+  const rotuloEtapaFinal = anulada
+    ? "⛔ Anulada"
+    : sessao.estado === "EM_APURACAO"
+      ? "Em Apuração"
+      : "Encerrada / Apurada";
 
   const stepperHtml = `
     <div class="session-stepper">
@@ -440,6 +448,11 @@ function renderizarDetalheSessao(idSessao) {
           A urna só aceita votos quando a sessão estiver no estado <strong>EM_VOTACAO</strong>.
           ${podeLiberar ? "Clique em 'Liberar Votação' abaixo para permitir votos." : ""}
           ${sessao.estado === "EM_APURACAO" ? "Urna fechada: clique em 'Apurar Resultado' para concluir a sessão." : ""}
+          ${
+            anulada
+              ? `Sessão anulada: <strong>${sessao.motivo_anulacao}</strong>. Os votos permanecem no log de auditoria, mas a sessão não produz resultado.`
+              : ""
+          }
           ${
             suspensa
               ? `Sessão suspensa: <strong>${sessao.motivo_suspensao}</strong>. Os ${sessao.total_votos} voto(s) já colhidos estão preservados; retome a sessão para continuar a votação.`
@@ -492,6 +505,7 @@ function renderizarDetalheSessao(idSessao) {
           : ""
       }
 
+      ${montarAnulacaoHtml(sessao, podeAnular)}
       ${montarPainelPresencaHtml(sessao, meta)}
       ${urnaHtml}
       ${apuracaoHtml}
@@ -557,6 +571,37 @@ function montarPainelPresencaHtml(sessao, meta) {
       }
     </div>
   `;
+}
+
+function montarAnulacaoHtml(sessao, podeAnular) {
+  if (!podeAnular) return "";
+  return `
+    <details style="margin-bottom: 1.25rem;">
+      <summary style="cursor: pointer; font-size: 0.85rem; color: var(--danger);">⛔ Anular sessão viciada</summary>
+      <form onsubmit="submeterAnulacao(event, '${sessao.id_sessao}')" style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; margin-top: 0.5rem;">
+        <div style="flex: 3; min-width: 200px;">
+          <label for="motivo-anulacao" style="font-size: 0.72rem;">Motivo da anulação (vício apurado)</label>
+          <input type="text" id="motivo-anulacao" placeholder="Ex.: eleitor inapto votou, falha no credenciamento" />
+        </div>
+        <button type="submit" class="btn btn-danger btn-sm" style="flex: 1; min-width: 140px;">Anular Sessão</button>
+      </form>
+    </details>
+  `;
+}
+
+async function submeterAnulacao(event, idSessao) {
+  event.preventDefault();
+  const motivo = document.getElementById("motivo-anulacao").value;
+  try {
+    await apiFetch(`/api/sessoes/${encodeURIComponent(idSessao)}/anular`, {
+      method: "POST",
+      body: JSON.stringify({ motivo }),
+    });
+    mostrarToast("Sessão anulada. O motivo ficou registrado no log de auditoria.", "success");
+    await carregarEstadoCompleto();
+  } catch (err) {
+    mostrarToast(`Erro ao anular: ${err.message}`, "error");
+  }
 }
 
 async function submeterSuspensao(event, idSessao) {
