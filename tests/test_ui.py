@@ -15,7 +15,7 @@ from UI.app import EstadoAplicacaoUI
 from UI.servidor import criar_servidor
 from votacao.recontagem import RecontagemRecusadaError
 from votacao.sessao import EstadoSessao, VotoRecusadoError
-from votacao.tramitacao import TramitacaoInvalidaError
+from votacao.tramitacao import MateriaIrrepetivelError, TramitacaoInvalidaError
 
 
 class TestEstadoAplicacaoUI:
@@ -553,6 +553,34 @@ class TestEstadoAplicacaoUI:
         assert tram["status"] == "APROVADA"
         assert tram["concluida"] is True
         assert tram["log_rito"][-1]["dados"]["decisao"] == "VETO_DERRUBADO"
+
+    def test_irrepetibilidade_e_retirada_de_pauta_pela_interface(self) -> None:
+        # #35: lei rejeitada só volta na mesma sessão legislativa com a maioria absoluta.
+        app = EstadoAplicacaoUI()
+        sessao = app.convocar_sessao_tramitacao("PL-101/2026", liberar_imediatamente=False)[
+            "sessao"
+        ]
+        app.registrar_presenca_sessao(sessao["id_sessao"], {"bancada": 300})
+        app.liberar_votacao_sessao(sessao["id_sessao"])
+        app.simular_votacao_plenario(sessao["id_sessao"], {"votos_sim": 10, "votos_nao": 270})
+        app.apurar_sessao(sessao["id_sessao"])
+        tram = app._serializar_tramitacao(app.tramitacoes["PL-101/2026"])
+        assert tram["status"] == "REJEITADA"
+
+        with pytest.raises(MateriaIrrepetivelError, match=r"art\. 67"):
+            app.iniciar_tramitacao("PL-101/2026")
+
+        nova = app.iniciar_tramitacao("PL-101/2026", proposta_maioria_absoluta=True)
+        assert nova["status"] == "EM_TRAMITACAO"
+        assert nova["casa_atual"] == "CAMARA"
+
+        retirada = app.retirar_tramitacao_de_pauta("PL-101/2026", "Requerimento do autor")
+        assert retirada["status"] == "ARQUIVADA"
+        assert retirada["concluida"] is True
+        assert retirada["motivo_arquivamento"] == "Requerimento do autor"
+
+        # Retirada de pauta não é rejeição: a reapresentação é livre
+        assert app.iniciar_tramitacao("PL-101/2026")["status"] == "EM_TRAMITACAO"
 
     def test_sancao_de_materia_em_tramitacao_e_recusada(self) -> None:
         app = EstadoAplicacaoUI()

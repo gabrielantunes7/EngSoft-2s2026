@@ -1544,21 +1544,30 @@ function renderizarAbaCongresso() {
             VETO_EM_APRECIACAO: `<span class="badge badge-warning">VETO EM APRECIAÇÃO</span>`,
             APROVADA: `<span class="badge badge-success">APROVADA</span>`,
             PROMULGADA: `<span class="badge badge-success">PROMULGADA</span>`,
-            REJEITADA: `<span class="badge badge-danger">ARQUIVADA / REJEITADA</span>`,
+            REJEITADA: `<span class="badge badge-danger">REJEITADA</span>`,
+            ARQUIVADA: `<span class="badge badge-subtle">RETIRADA DE PAUTA</span>`,
           };
           const statusBadge = badges[t.status] || `<span class="badge badge-subtle">${t.status}</span>`;
           const emEmendas = t.fase === "APRECIACAO_EMENDAS" && t.status === "EM_TRAMITACAO";
           const emVeto = t.status === "VETO_EM_APRECIACAO";
           const passouPorEmendas = t.fase === "APRECIACAO_EMENDAS" || Boolean(t.texto_prevalecente);
           const ehPec = t.tipo === "PEC";
-          const congressoVencido = !["EM_TRAMITACAO"].includes(t.status);
+          // Venceu as duas Casas só quem chegou à sanção, ao veto ou a um desfecho
+          // aprovativo; rejeitada ou retirada de pauta para na Casa em que estava.
+          const congressoVencido = ["ENVIADA_A_SANCAO", "VETO_EM_APRECIACAO", "APROVADA", "PROMULGADA"].includes(
+            t.status
+          );
           const rotulosFase = {
             CASA_INICIADORA: "Casa iniciadora",
             CASA_REVISORA: "Casa revisora",
             APRECIACAO_EMENDAS: "Apreciação das emendas da revisora (CF, art. 65)",
             APRECIACAO_VETO: "Apreciação do veto: maioria absoluta em cada Casa, votação aberta (CF, art. 66, § 4º)",
           };
-          const rotuloFase = t.status === "ENVIADA_A_SANCAO"
+          const rotuloFase = t.status === "REJEITADA" && !t.razoes_veto
+            ? `Rejeitada na ${t.casa_atual} (sessão legislativa ${t.sessao_legislativa}): ${ehPec ? "não pode ser reapresentada nesta sessão legislativa (CF, art. 60, § 5º)" : "só volta nesta sessão com proposta da maioria absoluta (CF, art. 67)"}`
+            : t.status === "ARQUIVADA"
+            ? `Retirada de pauta, sem decisão de mérito: ${t.motivo_arquivamento}`
+            : t.status === "ENVIADA_A_SANCAO"
             ? "Aguardando sanção ou veto do Presidente da República (CF, art. 66)"
             : t.status === "PROMULGADA"
               ? "Promulgada pelas Mesas da Câmara e do Senado (CF, art. 60, § 3º)"
@@ -1588,7 +1597,7 @@ function renderizarAbaCongresso() {
                 <br />Fase: ${rotuloFase}${textoFinal}${veto}
               </div>
               <div class="tramitacao-stepper">
-                <span class="tramitacao-stage ${t.fase === "CASA_INICIADORA" && t.status === "EM_TRAMITACAO" ? "active" : "done"}">
+                <span class="tramitacao-stage ${t.fase === "CASA_INICIADORA" && t.status === "EM_TRAMITACAO" ? "active" : t.fase !== "CASA_INICIADORA" || congressoVencido ? "done" : ""}">
                   Iniciadora (${t.casa_iniciadora})
                 </span>
                 <span>➔</span>
@@ -1601,7 +1610,7 @@ function renderizarAbaCongresso() {
                     : ""
                 }
                 <span>➔</span>
-                <span class="tramitacao-stage ${t.status === "ENVIADA_A_SANCAO" ? "active" : concluida && t.status !== "REJEITADA" ? "done" : ""}">
+                <span class="tramitacao-stage ${t.status === "ENVIADA_A_SANCAO" ? "active" : ["APROVADA", "PROMULGADA"].includes(t.status) ? "done" : ""}">
                   ${ehPec ? "Promulgação" : "Sanção"}
                 </span>
                 ${
@@ -1616,6 +1625,31 @@ function renderizarAbaCongresso() {
                 <button class="btn btn-primary btn-sm btn-block" onclick="convocarSessaoTramitacao('${t.materia_id}')">
                   🏛️ Convocar Sessão do Plenário (${t.id_proxima_sessao})
                 </button>
+              `
+                  : ""
+              }
+              <div style="font-size: 0.75rem; color: var(--text-muted);">Sessão legislativa: ${t.sessao_legislativa} (CF, art. 57)</div>
+              ${
+                t.status === "EM_TRAMITACAO"
+                  ? `
+                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem;">
+                  <input type="text" id="motivo-retirada-${t.materia_id}" placeholder="Motivo da retirada de pauta" style="flex: 2; min-width: 160px;" />
+                  <button class="btn btn-outline btn-sm" style="flex: 1; min-width: 120px;" onclick="retirarDePauta('${t.materia_id}')">📤 Retirar de pauta</button>
+                </div>
+              `
+                  : ""
+              }
+              ${
+                ["REJEITADA", "ARQUIVADA"].includes(t.status)
+                  ? `
+                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; align-items: center;">
+                  ${
+                    t.status === "REJEITADA" && !ehPec
+                      ? `<label style="font-size: 0.8rem; display: flex; gap: 0.35rem; align-items: center;"><input type="checkbox" id="maioria-absoluta-${t.materia_id}" /> Proposta da maioria absoluta (CF, art. 67)</label>`
+                      : ""
+                  }
+                  <button class="btn btn-secondary btn-sm" onclick="reapresentarMateria('${t.materia_id}')">🔁 Reapresentar matéria</button>
+                </div>
               `
                   : ""
               }
@@ -1672,6 +1706,37 @@ function renderizarAbaCongresso() {
         </tbody>
       </table>
     `;
+  }
+}
+
+async function retirarDePauta(materiaId) {
+  const campo = document.getElementById(`motivo-retirada-${materiaId}`);
+  try {
+    await apiFetch(`/api/tramitacoes/${encodeURIComponent(materiaId)}/retirar`, {
+      method: "POST",
+      body: JSON.stringify({ motivo: campo ? campo.value : "" }),
+    });
+    mostrarToast(`${materiaId} retirada de pauta, sem decisão de mérito.`, "success");
+    await carregarEstadoCompleto();
+  } catch (err) {
+    mostrarToast(`Erro ao retirar de pauta: ${err.message}`, "error");
+  }
+}
+
+async function reapresentarMateria(materiaId) {
+  const marcador = document.getElementById(`maioria-absoluta-${materiaId}`);
+  try {
+    await apiFetch("/api/tramitacoes", {
+      method: "POST",
+      body: JSON.stringify({
+        materia_id: materiaId,
+        proposta_maioria_absoluta: Boolean(marcador && marcador.checked),
+      }),
+    });
+    mostrarToast(`${materiaId} reapresentada: nova tramitação iniciada.`, "success");
+    await carregarEstadoCompleto();
+  } catch (err) {
+    mostrarToast(`Reapresentação recusada: ${err.message}`, "error");
   }
 }
 

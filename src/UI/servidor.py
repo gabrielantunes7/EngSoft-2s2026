@@ -166,7 +166,17 @@ class ManipuladorRequisicoesUI(BaseHTTPRequestHandler):
 
         if caminho == "/api/tramitacoes":
             materia_id = str(corpo.get("materia_id", ""))
-            return HTTPStatus.CREATED, self.app.iniciar_tramitacao(materia_id)
+            maioria = bool(corpo.get("proposta_maioria_absoluta", False))
+            return HTTPStatus.CREATED, self.app.iniciar_tramitacao(
+                materia_id, proposta_maioria_absoluta=maioria
+            )
+
+        if caminho.startswith("/api/tramitacoes/") and caminho.endswith("/retirar"):
+            meio = caminho.removeprefix("/api/tramitacoes/").removesuffix("/retirar")
+            motivo = str(corpo.get("motivo", ""))
+            return HTTPStatus.OK, self.app.retirar_tramitacao_de_pauta(
+                unquote(meio).strip("/"), motivo
+            )
 
         if caminho == "/api/tramitacoes/convocar-sessao":
             materia_id = str(corpo.get("materia_id", ""))
