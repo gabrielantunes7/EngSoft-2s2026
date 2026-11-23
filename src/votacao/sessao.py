@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from votacao.auditoria import LogDeAuditoria, TipoEvento
+from votacao.auditoria import LogDeAuditoria, PoliticaIdentificacao, TipoEvento
 from votacao.modelos import ResultadoApuracao, Voto
 from votacao.motor import MotorApuracao
 from votacao.observadores import ObservadorAuditoria, ObservadorSessao
@@ -83,6 +83,7 @@ class SessaoVotacao:
         observadores: Sequence[ObservadorSessao] | None = None,
         relogio: Callable[[], datetime] | None = None,
         quorum_instalacao: int | None = None,
+        exige_voto_nominal: bool = False,
     ) -> None:
         """Cria a sessão no estado CRIADA.
 
@@ -98,6 +99,9 @@ class SessaoVotacao:
                 torna a trava temporal determinística nos testes.
             quorum_instalacao: Número mínimo de presentes para liberar a votação.
                 None (padrão) dispensa a aferição na abertura.
+            exige_voto_nominal: Se True, a sessão recusa votos enquanto algum log de
+                auditoria dela estiver em política sigilosa (#44). Usado nas
+                deliberações em que o voto é aberto por lei, como as assembleias.
 
         Raises:
             ValueError: Se o identificador for vazio, o total de aptos ou o quórum de
@@ -127,6 +131,7 @@ class SessaoVotacao:
         self.regra = regra
         self.total_aptos = total_aptos
         self._quorum_instalacao = quorum_instalacao
+        self.exige_voto_nominal = exige_voto_nominal
         self._presentes: set[str] = set()
         self._observadores: list[ObservadorSessao] = []
         self._log = log
@@ -457,6 +462,7 @@ class SessaoVotacao:
             raise VotoRecusadoError(msg)
         self._exigir_estado(EstadoSessao.EM_VOTACAO, operacao="registrar voto")
         self._exigir_dentro_da_janela()
+        self._exigir_registro_nominal()
 
         identidades = self._identidades(voto)
         ja_votaram = sorted(identidades & self._eleitores)
@@ -533,6 +539,23 @@ class SessaoVotacao:
                 f"estado atual é {self._estado.value}, esperado {esperado.value}."
             )
             raise TransicaoInvalidaError(msg)
+
+    def _exigir_registro_nominal(self) -> None:
+        if not self.exige_voto_nominal:
+            return
+        sigilosos = [
+            obs.log.id_votacao
+            for obs in self._observadores
+            if isinstance(obs, ObservadorAuditoria)
+            and obs.log.politica != PoliticaIdentificacao.NOMINAL
+        ]
+        if sigilosos:
+            msg = (
+                f"A sessão '{self.id_sessao}' exige voto aberto e nominal (Lei das S/A, "
+                f"art. 130), mas o log de auditoria '{sigilosos[0]}' está em modo "
+                "sigiloso. O voto não foi registrado."
+            )
+            raise VotoRecusadoError(msg)
 
     def _exigir_quorum_instalacao(self) -> None:
         if self._quorum_instalacao is None:
