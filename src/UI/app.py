@@ -19,6 +19,7 @@ from votacao.modelos import (
     TipoMateriaCongresso,
     Voto,
 )
+from votacao.recontagem import recontar
 from votacao.regras.assembleia import RegraAssembleia
 from votacao.regras.ca import RegraCA
 from votacao.regras.congresso import RegraCongresso
@@ -1184,6 +1185,29 @@ class EstadoAplicacaoUI:
             "incluido": consulta.incluido,
             "mensagem": consulta.mensagem,
             "instrucao": consulta.instrucao,
+        }
+
+    def recontar_sessao(self, id_sessao: str) -> dict[str, Any]:
+        """Reapura a sessão só a partir do log e compara com a proclamação (#29)."""
+        sessao = self._obter_sessao(id_sessao)
+        if sessao.log is None:
+            msg = f"A sessão '{id_sessao}' não tem log de auditoria para recontar."
+            raise ValueError(msg)
+        recontagem = recontar(sessao.log, sessao.regra, ancora=self.ancoras_emitidas.get(id_sessao))
+        r = recontagem.resultado
+        return {
+            "id_sessao": id_sessao,
+            "confere": recontagem.confere,
+            "ancorada": id_sessao in self.ancoras_emitidas,
+            "resultado": {
+                "status": r.status.value,
+                "vencedor_ou_decisao": r.vencedor_ou_decisao,
+                "quorum_atingido": r.quorum_atingido,
+                "total_votantes": r.total_votantes,
+                "contagem_por_opcao": dict(r.contagem_por_opcao),
+            },
+            "opcoes_divergentes": {k: list(v) for k, v in recontagem.opcoes_divergentes.items()},
+            "campos_divergentes": {k: list(v) for k, v in recontagem.campos_divergentes.items()},
         }
 
     def consultar_aptidao_ui(self, dados: dict[str, Any]) -> dict[str, Any]:

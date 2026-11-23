@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from UI.app import EstadoAplicacaoUI
+from votacao.recontagem import RecontagemRecusadaError
 from votacao.sessao import TransicaoInvalidaError, VotoRecusadoError
 from votacao.tramitacao import TramitacaoInvalidaError
 
@@ -111,7 +112,12 @@ class ManipuladorRequisicoesUI(BaseHTTPRequestHandler):
             self._enviar_json(HTTPStatus.NOT_FOUND, {"erro": str(msg)})
         except PermissionError as exc:
             self._enviar_json(HTTPStatus.FORBIDDEN, {"erro": str(exc)})
-        except (VotoRecusadoError, TransicaoInvalidaError, TramitacaoInvalidaError) as exc:
+        except (
+            VotoRecusadoError,
+            TransicaoInvalidaError,
+            TramitacaoInvalidaError,
+            RecontagemRecusadaError,
+        ) as exc:
             # Recusas do domínio (voto duplicado, fora da janela, transição de estado
             # inválida) dependem do estado atual da sessão: conflito, não erro interno.
             self._enviar_json(HTTPStatus.CONFLICT, {"erro": str(exc)})
@@ -242,6 +248,8 @@ class ManipuladorRequisicoesUI(BaseHTTPRequestHandler):
                 if acao == "apurar":
                     com_emenda = bool(corpo.get("com_emenda", False))
                     return HTTPStatus.OK, self.app.apurar_sessao(id_sessao, com_emenda=com_emenda)
+                if acao == "recontar":
+                    return HTTPStatus.OK, self.app.recontar_sessao(id_sessao)
                 if acao == "verificar-protocolo":
                     protocolo = str(corpo.get("protocolo", ""))
                     return HTTPStatus.OK, self.app.verificar_protocolo_auditoria(
