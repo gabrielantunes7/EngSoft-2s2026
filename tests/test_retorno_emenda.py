@@ -78,7 +78,7 @@ def test_aprovacao_sem_emenda_na_revisora_conclui_como_hoje():
     tramitacao = _pl()
     _aprovar(tramitacao)
 
-    assert _aprovar(tramitacao) == StatusTramitacao.APROVADA
+    assert _aprovar(tramitacao) == StatusTramitacao.ENVIADA_A_SANCAO
     assert tramitacao.texto_prevalecente is None
     assert tramitacao.casa_atual == SENADO
 
@@ -139,7 +139,8 @@ def test_apreciacao_das_emendas_aprova_a_materia_nos_dois_desfechos(
 
     status = _aprovar(tramitacao) if acolhe else _rejeitar(tramitacao)
 
-    assert status == StatusTramitacao.APROVADA
+    # Aprovada no Congresso: a lei segue para a sanção (#34)
+    assert status == StatusTramitacao.ENVIADA_A_SANCAO
     assert tramitacao.texto_prevalecente == texto
     ultimo = tramitacao.historico[-1]
     assert ultimo.fase == FaseTramitacao.APRECIACAO_EMENDAS
@@ -152,7 +153,7 @@ def test_nao_ha_segundo_reenvio_a_revisora():
     _aprovar(tramitacao, com_emenda=True)
     _aprovar(tramitacao)
 
-    with pytest.raises(TramitacaoInvalidaError, match="APROVADA"):
+    with pytest.raises(TramitacaoInvalidaError, match="ENVIADA_A_SANCAO"):
         tramitacao.nova_sessao()
 
 
@@ -253,8 +254,8 @@ def test_retorno_fica_no_log_com_casa_de_origem_e_destino():
     assert eventos[1][1]["fase"] == "APRECIACAO_EMENDAS"
     assert "art. 65" in eventos[1][1]["motivo"]
     assert eventos[2] == (
-        TipoEvento.TRAMITACAO_CONCLUIDA,
-        {"status": "APROVADA", "casa": "CAMARA", "texto_prevalecente": "INICIADORA"},
+        TipoEvento.TRAMITACAO_ENVIADA_A_SANCAO,
+        {"casa": "CAMARA", "texto_prevalecente": "INICIADORA"},
     )
     assert log.verificar_integridade().integro
 

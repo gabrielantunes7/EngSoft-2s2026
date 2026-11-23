@@ -24,7 +24,7 @@ from votacao.regras.ca import RegraCA
 from votacao.regras.congresso import RegraCongresso
 from votacao.servicos import ServicoElegibilidade
 from votacao.sessao import EstadoSessao, QuorumInstalacaoError, SessaoVotacao
-from votacao.tramitacao import FaseTramitacao, TramitacaoLegislativa
+from votacao.tramitacao import FaseTramitacao, StatusTramitacao, TramitacaoLegislativa
 
 # Política de sigilo por contexto (descoberta D-AUD-04 da Atividade 3): a eleição de
 # CA é secreta; na assembleia o voto é aberto e nominal (Lei das S/A e CVM, história
@@ -456,8 +456,8 @@ class EstadoAplicacaoUI:
             }
             for h in t.historico
         ]
-        concluida = t.status.value in ("APROVADA", "REJEITADA")
-        aprovada = t.status.value == "APROVADA"
+        concluida = t.status.concluida
+        aprovada = t.status in (StatusTramitacao.APROVADA, StatusTramitacao.PROMULGADA)
         return {
             "materia_id": t.materia_id,
             "titulo": materia.titulo if materia else t.materia_id,
@@ -467,6 +467,9 @@ class EstadoAplicacaoUI:
             "aprovada": aprovada,
             "fase": t.fase.value,
             "aceita_emenda": t.aceita_emenda,
+            "razoes_veto": t.razoes_veto,
+            "em_deliberacao": t.status
+            in (StatusTramitacao.EM_TRAMITACAO, StatusTramitacao.VETO_EM_APRECIACAO),
             "texto_prevalecente": t.texto_prevalecente.value if t.texto_prevalecente else None,
             "log_rito": [
                 {"evento": r.evento.value, "dados": r.dados, "timestamp": r.timestamp.isoformat()}
@@ -1057,6 +1060,25 @@ class EstadoAplicacaoUI:
         self.tramitacoes[id_limpo] = tram
         return self._serializar_tramitacao(tram)
 
+    def sancionar_tramitacao(self, materia_id: str) -> dict[str, Any]:
+        """Registra a sanção presidencial da lei aprovada (#34)."""
+        tram = self._obter_tramitacao(materia_id)
+        tram.sancionar()
+        return self._serializar_tramitacao(tram)
+
+    def vetar_tramitacao(self, materia_id: str, razoes: str) -> dict[str, Any]:
+        """Registra o veto presidencial e abre a sua apreciação pelo Congresso (#34)."""
+        tram = self._obter_tramitacao(materia_id)
+        tram.vetar(razoes)
+        return self._serializar_tramitacao(tram)
+
+    def _obter_tramitacao(self, materia_id: str) -> TramitacaoLegislativa:
+        id_limpo = materia_id.strip().upper()
+        if id_limpo not in self.tramitacoes:
+            msg = f"Tramitação da matéria '{id_limpo}' não encontrada."
+            raise KeyError(msg)
+        return self.tramitacoes[id_limpo]
+
     def convocar_sessao_tramitacao(
         self,
         materia_id: str,
@@ -1087,11 +1109,12 @@ class EstadoAplicacaoUI:
 
         log = LogDeAuditoria(id_sessao)
         sessao = tram.nova_sessao(log=log)
-        etapa = (
-            "Apreciação das emendas"
-            if tram.fase == FaseTramitacao.APRECIACAO_EMENDAS
-            else f"{tram.turno_atual}º Turno"
-        )
+        if tram.fase == FaseTramitacao.APRECIACAO_EMENDAS:
+            etapa = "Apreciação das emendas"
+        elif tram.fase == FaseTramitacao.APRECIACAO_VETO:
+            etapa = "Apreciação do veto: SIM derruba o veto"
+        else:
+            etapa = f"{tram.turno_atual}º Turno"
         chave_mapa = id_sessao
 
         aviso: str | None = None
