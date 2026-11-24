@@ -230,6 +230,7 @@ por uma branch `release/*` e identificada por uma tag:
 | `a2-v1.0.0` | Gerência de configuração, CI e primeiras funcionalidades |
 | `a4-v1.0.0` | Arquitetura, padrões de projeto e refatoração |
 | `a5-v1.0.0` | Teste funcional, estrutural e de mutação |
+| `final-v2.0.0` | Entrega final: interface web e as histórias da Atividade 3 (rito, sessão e auditoria) |
 
 O fluxo completo está em [CONTRIBUTING.md](CONTRIBUTING.md).
 
