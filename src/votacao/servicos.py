@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 
+from votacao.dados.assembleia import Procuracao
 from votacao.dados.seeds import BancoDadosMock
 from votacao.fabricas import (
     _CATALOGO_FABRICAS,
@@ -12,6 +13,7 @@ from votacao.modelos import (
     AptidaoVoto,
     CasaLegislativa,
     ElegibilidadeCandidato,
+    Representacao,
     Usuario,
     Voto,
 )
@@ -153,11 +155,27 @@ class ServicoElegibilidade:
         )
         timestamp_voto = momento or datetime.now(UTC)
 
+        representacoes: tuple[Representacao, ...] = ()
+        peso_proprio: int | None = None
+        if procurador_id:
+            # #42: o voto por procuração discrimina o outorgante, o peso e o instrumento.
+            procuracao = Procuracao(outorgante_id=eleitor_id, procurador_id=procurador_id)
+            representacoes = (
+                Representacao(
+                    outorgante_id=eleitor_id,
+                    peso=aptidao.peso_voto,
+                    procuracao_id=procuracao.identificador,
+                ),
+            )
+            peso_proprio = 0
+
         return Voto(
             eleitor_id=identificador_registro,
             opcao=opcao.strip().upper(),
             peso=aptidao.peso_voto,
             timestamp=timestamp_voto,
+            representacoes=representacoes,
+            peso_proprio=peso_proprio,
         )
 
     def autorizar_voto_do_procurador(
@@ -211,6 +229,8 @@ class ServicoElegibilidade:
             peso=poder.peso_total,
             timestamp=momento or datetime.now(UTC),
             representados=poder.titulares,
+            representacoes=poder.representacoes,
+            peso_proprio=poder.peso_proprio,
         )
 
     def _normalizar_contexto(self, contexto: str) -> str:

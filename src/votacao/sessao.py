@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from votacao.auditoria import LogDeAuditoria, TipoEvento
+from votacao.auditoria import LogDeAuditoria, PoliticaIdentificacao, TipoEvento
 from votacao.modelos import ResultadoApuracao, Voto
 from votacao.motor import MotorApuracao
 from votacao.observadores import ObservadorAuditoria, ObservadorSessao
@@ -21,13 +21,19 @@ SEPARADOR_PROCURACAO = "#rep:"
 
 
 class EstadoSessao(StrEnum):
-    """Etapas do ciclo de vida de uma sessão, na ordem em que ocorrem."""
+    """Etapas do ciclo de vida de uma sessão, na ordem em que ocorrem.
+
+    SUSPENSA é um desvio temporário a partir de EM_VOTACAO, que retorna a ela na retomada.
+    ANULADA é terminal e pode ser alcançada de qualquer etapa posterior à abertura.
+    """
 
     CRIADA = "CRIADA"
     ABERTA = "ABERTA"
     EM_VOTACAO = "EM_VOTACAO"
+    SUSPENSA = "SUSPENSA"
     EM_APURACAO = "EM_APURACAO"
     ENCERRADA = "ENCERRADA"
+    ANULADA = "ANULADA"
 
 
 class TransicaoInvalidaError(Exception):
@@ -38,17 +44,29 @@ class VotoRecusadoError(Exception):
     """Voto inadmissível: o eleitor já votou ou a janela de votação não está aberta."""
 
 
+class QuorumInstalacaoError(TransicaoInvalidaError):
+    """Votação não liberada: os presentes não atingem o quórum de instalação."""
+
+
 class SessaoVotacao:
     """Sessão de votação controlada por uma máquina de estados e padrão Observer.
 
     A sessão percorre CRIADA → ABERTA → EM_VOTACAO → EM_APURACAO → ENCERRADA, sempre
-    nessa ordem e sem retorno. Votos só são aceitos em EM_VOTACAO, dentro da janela
-    de votação quando ela é definida, e no máximo um por eleitor. A apuração só
-    acontece depois que a urna foi fechada.
+    nessa ordem. A única volta permitida é a da suspensão: EM_VOTACAO → SUSPENSA →
+    EM_VOTACAO, quantas vezes for preciso, preservando os votos já colhidos. Uma sessão
+    viciada pode ser anulada de qualquer etapa posterior à abertura: ANULADA é terminal
+    e não produz resultado. Votos só
+    são aceitos em EM_VOTACAO, dentro da janela de votação quando ela é definida, e no
+    máximo um por eleitor. A apuração só acontece depois que a urna foi fechada.
 
     A sessão atua como publicador (Subject) no padrão Observer: sempre que transita de
     estado ou admite um voto, notifica os observadores registrados (como o
     `ObservadorAuditoria`), permitindo desacoplar a auditoria, notificações e métricas.
+
+    Quando há quórum de instalação, a sessão só delibera com quórum aferido **antes**
+    da votação: a presença é registrada à parte do voto e a urna só é liberada se o
+    número de presentes atingir o mínimo (CF, art. 47). Sem quórum de instalação, a
+    presença é apenas informativa e o comportamento é o de antes.
 
     Attributes:
         id_sessao: Identificador da sessão.
@@ -64,6 +82,8 @@ class SessaoVotacao:
         log: LogDeAuditoria | None = None,
         observadores: Sequence[ObservadorSessao] | None = None,
         relogio: Callable[[], datetime] | None = None,
+        quorum_instalacao: int | None = None,
+        exige_voto_nominal: bool = False,
     ) -> None:
         """Cria a sessão no estado CRIADA.
 
@@ -77,10 +97,15 @@ class SessaoVotacao:
             relogio: Função que devolve o instante corrente, usada para aplicar a
                 janela de votação. O padrão é a hora corrente em UTC; injetar outra
                 torna a trava temporal determinística nos testes.
+            quorum_instalacao: Número mínimo de presentes para liberar a votação.
+                None (padrão) dispensa a aferição na abertura.
+            exige_voto_nominal: Se True, a sessão recusa votos enquanto algum log de
+                auditoria dela estiver em política sigilosa (#44). Usado nas
+                deliberações em que o voto é aberto por lei, como as assembleias.
 
         Raises:
-            ValueError: Se o identificador for vazio, o total de aptos for negativo ou
-                o log pertencer a outra votação.
+            ValueError: Se o identificador for vazio, o total de aptos ou o quórum de
+                instalação for negativo, ou o log pertencer a outra votação.
             TypeError: Se a regra não implementar RegraDeVotacao.
         """
         if not id_sessao.strip():
@@ -92,6 +117,9 @@ class SessaoVotacao:
         if total_aptos < 0:
             msg = "O total de aptos não pode ser negativo."
             raise ValueError(msg)
+        if quorum_instalacao is not None and quorum_instalacao < 0:
+            msg = "O quórum de instalação não pode ser negativo."
+            raise ValueError(msg)
         if log is not None and log.id_votacao != id_sessao:
             msg = (
                 f"O log de auditoria pertence à votação '{log.id_votacao}', "
@@ -102,6 +130,9 @@ class SessaoVotacao:
         self.id_sessao = id_sessao
         self.regra = regra
         self.total_aptos = total_aptos
+        self._quorum_instalacao = quorum_instalacao
+        self.exige_voto_nominal = exige_voto_nominal
+        self._presentes: set[str] = set()
         self._observadores: list[ObservadorSessao] = []
         self._log = log
 
@@ -119,6 +150,9 @@ class SessaoVotacao:
         self._eleitores: set[str] = set()
         self._votos: list[Voto] = []
         self._resultado: ResultadoApuracao | None = None
+        self._motivo_suspensao: str | None = None
+        self._total_suspensoes = 0
+        self._motivo_anulacao: str | None = None
 
     @property
     def log(self) -> LogDeAuditoria | None:
@@ -188,9 +222,73 @@ class SessaoVotacao:
         """Resultado da apuração, ou None enquanto a sessão não for apurada."""
         return self._resultado
 
+    @property
+    def motivo_suspensao(self) -> str | None:
+        """Motivo da suspensão em curso, ou None se a sessão não estiver suspensa."""
+        return self._motivo_suspensao
+
+    @property
+    def motivo_anulacao(self) -> str | None:
+        """Motivo da anulação, ou None se a sessão não foi anulada."""
+        return self._motivo_anulacao
+
+    @property
+    def total_suspensoes(self) -> int:
+        """Quantas vezes a sessão já foi suspensa."""
+        return self._total_suspensoes
+
+    @property
+    def quorum_instalacao(self) -> int | None:
+        """Mínimo de presentes para liberar a votação, ou None se não houver aferição."""
+        return self._quorum_instalacao
+
+    @property
+    def presentes(self) -> frozenset[str]:
+        """Participantes cuja presença foi registrada, inclusive por terem votado."""
+        return frozenset(self._presentes)
+
+    @property
+    def total_presentes(self) -> int:
+        """Quantidade de participantes presentes."""
+        return len(self._presentes)
+
     def abrir(self) -> None:
         """Instala a sessão (CRIADA → ABERTA)."""
         self._transitar(de=EstadoSessao.CRIADA, para=EstadoSessao.ABERTA)
+
+    def registrar_presenca(self, *participantes: str) -> int:
+        """Registra a presença de participantes, em operação distinta do voto.
+
+        Presença e voto são fatos diferentes: um parlamentar presente pode se abster de
+        votar, e é a presença, e não o voto, que instala a deliberação (CF, art. 47).
+        Registrar de novo quem já está presente não tem efeito.
+
+        Args:
+            participantes: Identificadores dos presentes.
+
+        Returns:
+            Total de presentes após o registro.
+
+        Raises:
+            ValueError: Se algum identificador for vazio.
+            TransicaoInvalidaError: Se a urna já foi fechada (EM_APURACAO ou ENCERRADA).
+        """
+        if self._estado in (
+            EstadoSessao.EM_APURACAO,
+            EstadoSessao.ENCERRADA,
+            EstadoSessao.ANULADA,
+        ):
+            msg = (
+                f"Não é possível registrar presença na sessão '{self.id_sessao}': "
+                f"a votação já foi encerrada (estado {self._estado.value})."
+            )
+            raise TransicaoInvalidaError(msg)
+        if any(not p.strip() for p in participantes):
+            msg = "O identificador do participante presente não pode ser vazio."
+            raise ValueError(msg)
+
+        self._presentes.update(participantes)
+        return len(self._presentes)
 
     def liberar_votacao(
         self,
@@ -206,11 +304,24 @@ class SessaoVotacao:
         Raises:
             ValueError: Se o início for posterior ao fim.
             TransicaoInvalidaError: Se a sessão não estiver em ABERTA.
+            QuorumInstalacaoError: Se houver quórum de instalação e os presentes não o
+                atingirem. A sessão permanece em ABERTA, e nenhum voto é colhido.
         """
         self._exigir_estado(EstadoSessao.ABERTA, operacao="passar a EM_VOTACAO")
         if inicio is not None and fim is not None and inicio > fim:
             msg = "O início da janela de votação não pode ser posterior ao fim."
             raise ValueError(msg)
+        self._exigir_quorum_instalacao()
+
+        dados: dict[str, Any] = {
+            "inicio": inicio.isoformat() if inicio is not None else None,
+            "fim": fim.isoformat() if fim is not None else None,
+            "total_aptos": self.total_aptos,
+        }
+        if self._quorum_instalacao is not None:
+            # A instalação fica no log com quantos estavam presentes (RNF-RITO-01).
+            dados["total_presentes"] = len(self._presentes)
+            dados["quorum_instalacao"] = self._quorum_instalacao
 
         self._inicio_votacao = inicio
         self._fim_votacao = fim
@@ -218,12 +329,105 @@ class SessaoVotacao:
             de=EstadoSessao.ABERTA,
             para=EstadoSessao.EM_VOTACAO,
             evento=TipoEvento.VOTACAO_ABERTA,
+            dados=dados,
+        )
+
+    def suspender(self, motivo: str) -> None:
+        """Suspende a votação em curso (EM_VOTACAO → SUSPENSA), preservando os votos.
+
+        Sessões reais são interrompidas por queda de quórum, questão de ordem ou falta
+        de tempo regimental; suspender evita abandonar a sessão e convocar outra, o que
+        registraria como duas deliberações o que foi uma só (D-RITO-04).
+
+        Args:
+            motivo: Razão da suspensão, registrada no log de auditoria.
+
+        Raises:
+            ValueError: Se o motivo for vazio.
+            TransicaoInvalidaError: Se a sessão não estiver em EM_VOTACAO.
+        """
+        self._exigir_estado(EstadoSessao.EM_VOTACAO, operacao="suspender a votação")
+        motivo_limpo = motivo.strip()
+        if not motivo_limpo:
+            msg = "Informe o motivo da suspensão da sessão."
+            raise ValueError(msg)
+
+        self._transitar(
+            de=EstadoSessao.EM_VOTACAO,
+            para=EstadoSessao.SUSPENSA,
+            evento=TipoEvento.VOTACAO_SUSPENSA,
+            dados={"motivo": motivo_limpo, "total_votos": len(self._votos)},
+        )
+        self._motivo_suspensao = motivo_limpo
+        self._total_suspensoes += 1
+
+    def retomar(self) -> None:
+        """Retoma a votação suspensa (SUSPENSA → EM_VOTACAO).
+
+        Os votos colhidos antes da suspensão continuam valendo, e quem já votou segue
+        impedido de votar de novo. A janela de votação não é estendida. Se a sessão tem
+        quórum de instalação, ele é aferido de novo antes da retomada.
+
+        Raises:
+            TransicaoInvalidaError: Se a sessão não estiver suspensa.
+            QuorumInstalacaoError: Se houver quórum de instalação e os presentes não o
+                atingirem. A sessão permanece SUSPENSA.
+        """
+        self._exigir_estado(EstadoSessao.SUSPENSA, operacao="retomar a votação")
+        self._exigir_quorum_instalacao()
+
+        motivo = self._motivo_suspensao
+        self._transitar(
+            de=EstadoSessao.SUSPENSA,
+            para=EstadoSessao.EM_VOTACAO,
+            evento=TipoEvento.VOTACAO_RETOMADA,
+            dados={"motivo_da_suspensao": motivo, "total_votos": len(self._votos)},
+        )
+        self._motivo_suspensao = None
+
+    def anular(self, motivo: str) -> None:
+        """Anula a sessão viciada, registrando o motivo (estado terminal ANULADA).
+
+        A anulação distingue no histórico uma votação inválida de uma válida (D-RITO-04).
+        É possível de qualquer etapa posterior à abertura, inclusive depois da apuração:
+        nesse caso o resultado é descartado. Uma sessão anulada não aceita votos, não é
+        apurada e não pode ser registrada na tramitação.
+
+        Args:
+            motivo: Vício que justifica a anulação, registrado no log de auditoria.
+
+        Raises:
+            ValueError: Se o motivo for vazio.
+            TransicaoInvalidaError: Se a sessão ainda não foi aberta (CRIADA) ou já foi
+                anulada.
+        """
+        if self._estado in (EstadoSessao.CRIADA, EstadoSessao.ANULADA):
+            msg = (
+                f"Não é possível anular a sessão '{self.id_sessao}': "
+                f"estado atual é {self._estado.value}. A anulação vale a partir da abertura "
+                "e só uma vez."
+            )
+            raise TransicaoInvalidaError(msg)
+        motivo_limpo = motivo.strip()
+        if not motivo_limpo:
+            msg = "Informe o motivo da anulação da sessão."
+            raise ValueError(msg)
+
+        estado_anterior = self._estado
+        self._transitar(
+            de=estado_anterior,
+            para=EstadoSessao.ANULADA,
+            evento=TipoEvento.SESSAO_ANULADA,
             dados={
-                "inicio": inicio.isoformat() if inicio is not None else None,
-                "fim": fim.isoformat() if fim is not None else None,
-                "total_aptos": self.total_aptos,
+                "motivo": motivo_limpo,
+                "estado_anterior": estado_anterior.value,
+                "total_votos": len(self._votos),
+                "resultado_descartado": self._resultado is not None,
             },
         )
+        self._motivo_anulacao = motivo_limpo
+        self._motivo_suspensao = None
+        self._resultado = None
 
     def encerrar_votacao(self) -> None:
         """Fecha a urna (EM_VOTACAO → EM_APURACAO)."""
@@ -248,10 +452,17 @@ class SessaoVotacao:
             TransicaoInvalidaError: Se a sessão não estiver em EM_VOTACAO.
             VotoRecusadoError: Se o relógio estiver fora da janela de votação ou se o
                 eleitor — diretamente, por procurador ou representado em voto consolidado —
-                já tiver votado nesta sessão.
+                já tiver votado nesta sessão, ou se a sessão estiver suspensa.
         """
+        if self._estado == EstadoSessao.SUSPENSA:
+            msg = (
+                f"A sessão '{self.id_sessao}' está suspensa ({self._motivo_suspensao}). "
+                "Os votos já colhidos estão preservados; aguarde a retomada para votar."
+            )
+            raise VotoRecusadoError(msg)
         self._exigir_estado(EstadoSessao.EM_VOTACAO, operacao="registrar voto")
         self._exigir_dentro_da_janela()
+        self._exigir_registro_nominal()
 
         identidades = self._identidades(voto)
         ja_votaram = sorted(identidades & self._eleitores)
@@ -260,6 +471,8 @@ class SessaoVotacao:
             raise VotoRecusadoError(msg)
 
         self._eleitores.update(identidades)
+        # Quem vota está presente: garante presentes >= votantes mesmo sem registro prévio.
+        self._presentes.update(identidades)
         self._votos.append(voto)
 
         protocolo: str | None = None
@@ -326,6 +539,35 @@ class SessaoVotacao:
                 f"estado atual é {self._estado.value}, esperado {esperado.value}."
             )
             raise TransicaoInvalidaError(msg)
+
+    def _exigir_registro_nominal(self) -> None:
+        if not self.exige_voto_nominal:
+            return
+        sigilosos = [
+            obs.log.id_votacao
+            for obs in self._observadores
+            if isinstance(obs, ObservadorAuditoria)
+            and obs.log.politica != PoliticaIdentificacao.NOMINAL
+        ]
+        if sigilosos:
+            msg = (
+                f"A sessão '{self.id_sessao}' exige voto aberto e nominal (Lei das S/A, "
+                f"art. 130), mas o log de auditoria '{sigilosos[0]}' está em modo "
+                "sigiloso. O voto não foi registrado."
+            )
+            raise VotoRecusadoError(msg)
+
+    def _exigir_quorum_instalacao(self) -> None:
+        if self._quorum_instalacao is None:
+            return
+        presentes = len(self._presentes)
+        if presentes < self._quorum_instalacao:
+            msg = (
+                f"Quórum de instalação não atingido na sessão '{self.id_sessao}': "
+                f"há {presentes} presentes e são exigidos {self._quorum_instalacao} "
+                f"(CF, art. 47). A votação não foi liberada."
+            )
+            raise QuorumInstalacaoError(msg)
 
     def _exigir_dentro_da_janela(self) -> None:
         if self._inicio_votacao is None and self._fim_votacao is None:

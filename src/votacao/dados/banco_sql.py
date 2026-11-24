@@ -34,7 +34,10 @@ class BancoDadosSQL:
 
     def __init__(self, database: str = ":memory:") -> None:
         self.database = database
-        self.conexao = sqlite3.connect(database)
+        # check_same_thread=False permite usar a conexão fora da thread que a criou
+        # (ex.: servidor HTTP com uma thread por requisição). Quem compartilha a
+        # instância entre threads deve serializar o acesso, como faz o servidor da UI.
+        self.conexao = sqlite3.connect(database, check_same_thread=False)
         self.conexao.row_factory = sqlite3.Row
         self.conexao.execute("PRAGMA foreign_keys = ON;")
 

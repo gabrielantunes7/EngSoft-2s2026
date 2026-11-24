@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import random
+import secrets
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
@@ -20,8 +22,15 @@ class TipoEvento(StrEnum):
 
     VOTACAO_ABERTA = "VOTACAO_ABERTA"
     VOTO_REGISTRADO = "VOTO_REGISTRADO"
+    VOTACAO_SUSPENSA = "VOTACAO_SUSPENSA"
+    VOTACAO_RETOMADA = "VOTACAO_RETOMADA"
     VOTACAO_ENCERRADA = "VOTACAO_ENCERRADA"
     RESULTADO_PROCLAMADO = "RESULTADO_PROCLAMADO"
+    SESSAO_ANULADA = "SESSAO_ANULADA"
+    TRAMITACAO_CASA_ALTERADA = "TRAMITACAO_CASA_ALTERADA"
+    TRAMITACAO_CONCLUIDA = "TRAMITACAO_CONCLUIDA"
+    TRAMITACAO_ENVIADA_A_SANCAO = "TRAMITACAO_ENVIADA_A_SANCAO"
+    TRAMITACAO_VETO = "TRAMITACAO_VETO"
 
 
 @dataclass(frozen=True)
@@ -114,6 +123,56 @@ class RegistroAuditoria:
         return hashlib.sha256(conteudo.encode("utf-8")).hexdigest()
 
 
+class PoliticaIdentificacao(StrEnum):
+    """Política de identificação do voto no log, conforme o contexto (D-AUD-04).
+
+    SIGILOSA (padrão): o voto entra sem conteúdo nem eleitor, e as cédulas são publicadas
+    embaralhadas no encerramento (#28). NOMINAL: o voto entra com eleitor, opção e peso,
+    como exigem a Lei das S/A (art. 130) e a CVM para o mapa de votação das assembleias.
+    """
+
+    SIGILOSA = "SIGILOSA"
+    NOMINAL = "NOMINAL"
+
+
+class SituacaoComprovante(StrEnum):
+    """Resposta da consulta de um comprovante de voto."""
+
+    INCLUIDO = "INCLUIDO"
+    REGISTRADO_URNA_ABERTA = "REGISTRADO_URNA_ABERTA"
+    NAO_ENCONTRADO = "NAO_ENCONTRADO"
+    CADEIA_REPROVADA = "CADEIA_REPROVADA"
+
+
+# Instrução entregue em toda consulta, sem jargão técnico (RNF-AUD-05).
+INSTRUCAO_COMPROVANTE = (
+    "Este comprovante serve para você conferir que o seu voto foi registrado e entrou na "
+    "urna. Ele não mostra em quem você votou: ninguém consegue descobrir o seu voto a "
+    "partir dele, e por isso ele também não serve para provar a outra pessoa como você "
+    "votou."
+)
+
+
+@dataclass(frozen=True)
+class ConsultaComprovante:
+    """Resultado da consulta de um comprovante, sem opção, peso nem horário do voto.
+
+    Attributes:
+        situacao: Situação do voto ligado ao protocolo.
+        mensagem: Explicação da situação, em linguagem não técnica.
+        instrucao: O que o comprovante prova e o que não revela.
+    """
+
+    situacao: SituacaoComprovante
+    mensagem: str
+    instrucao: str = INSTRUCAO_COMPROVANTE
+
+    @property
+    def incluido(self) -> bool:
+        """Se o voto consta da urna encerrada e a cadeia foi aprovada contra a âncora."""
+        return self.situacao == SituacaoComprovante.INCLUIDO
+
+
 @dataclass(frozen=True)
 class ResultadoVerificacao:
     """Veredito da conferência de integridade de uma cadeia de registros.
@@ -178,23 +237,45 @@ class ResumoEncerramento:
             raise ValueError(msg) from erro
 
 
+def _votante(voto: Voto) -> str:
+    """Quem emitiu o voto: no voto por procuração 'outorgante#rep:procurador', o procurador."""
+    return voto.eleitor_id.split("#rep:", 1)[-1]
+
+
 class LogDeAuditoria:
     """Cadeia de registros de auditoria de uma votação.
 
     Cada evento registrado carrega o hash do evento anterior, de modo que alterar ou
     remover um registro quebra a cadeia a partir dele.
 
+    O voto entra na cadeia em dois momentos separados, para que o comprovante prove a
+    inclusão sem revelar o conteúdo (#28): no voto, um VOTO_REGISTRADO sem opção, peso
+    ou eleitor, cujo hash é o protocolo; no encerramento, as cédulas (opção e peso) de
+    todos os votos, em ordem aleatória e sem horário, que permitem recontar o resultado
+    sem ligar nenhuma cédula a quem votou, nem pela ordem de chegada.
+
     Attributes:
         id_votacao: Identificador da votação auditada.
     """
 
-    def __init__(self, id_votacao: str, relogio: Callable[[], datetime] | None = None) -> None:
+    def __init__(
+        self,
+        id_votacao: str,
+        relogio: Callable[[], datetime] | None = None,
+        aleatorio: random.Random | None = None,
+        politica: PoliticaIdentificacao = PoliticaIdentificacao.SIGILOSA,
+    ) -> None:
         """Inicializa um log vazio.
 
         Args:
             id_votacao: Identificador da votação auditada.
             relogio: Função que devolve o instante do registro. O padrão é a hora
                 corrente em UTC; injetar outra torna o registro determinístico nos testes.
+            aleatorio: Fonte aleatória usada para embaralhar as cédulas no encerramento.
+                O padrão é `secrets.SystemRandom`, imprevisível; injetar uma fonte com
+                semente torna o embaralhamento reprodutível nos testes.
+            politica: Política de identificação do voto. SIGILOSA (padrão) para
+                eleições secretas; NOMINAL para deliberações de voto aberto (#44).
 
         Raises:
             ValueError: Se o identificador da votação for vazio.
@@ -205,7 +286,14 @@ class LogDeAuditoria:
 
         self.id_votacao = id_votacao
         self._relogio = relogio if relogio is not None else lambda: datetime.now(UTC)
+        self._aleatorio = aleatorio if aleatorio is not None else secrets.SystemRandom()
+        self.politica = politica
+        # Titulares cujas cotas já entraram em algum voto do log nominal (#42).
+        self._titulares_computados: set[str] = set()
         self._registros: list[RegistroAuditoria] = []
+        # Cédulas guardadas fora da cadeia até o encerramento, quando são publicadas
+        # embaralhadas. Nunca contêm o eleitor nem a ordem de chegada depois de publicadas.
+        self._cedulas_pendentes: list[list[Any]] = []
 
     @property
     def registros(self) -> tuple[RegistroAuditoria, ...]:
@@ -233,9 +321,14 @@ class LogDeAuditoria:
         Returns:
             O registro criado, cujo hash serve de protocolo.
 
+        Ao registrar VOTACAO_ENCERRADA, o log acrescenta aos dados a lista `cedulas` com
+        os pares [opção, peso] de todos os votos registrados até ali, embaralhados.
+
         Raises:
             TypeError: Se `dados` contiver valor não serializável em JSON.
         """
+        if evento == TipoEvento.VOTACAO_ENCERRADA:
+            dados = {**(dados or {}), "cedulas": self._publicar_cedulas()}
         try:
             registro = RegistroAuditoria.criar(
                 indice=len(self._registros),
@@ -256,11 +349,12 @@ class LogDeAuditoria:
         return registro
 
     def registrar_voto(self, voto: Voto) -> RegistroAuditoria:
-        """Registra um voto preservando o sigilo de quem votou.
+        """Registra a inclusão de um voto sem gravar o seu conteúdo nem o eleitor.
 
-        Apenas a opção escolhida e o peso aplicado são gravados. O `eleitor_id` entra
-        neste método e não é persistido em lugar nenhum da cadeia: é essa ausência que
-        garante o anonimato do voto, sem abrir mão da auditabilidade da contagem.
+        O VOTO_REGISTRADO não contém opção, peso nem `eleitor_id`: o hash dele é o
+        comprovante, que prova a inclusão do voto mas não revela em quem se votou
+        (D-AUD-02). A opção e o peso ficam guardados fora da cadeia e só entram nela no
+        encerramento, entre as cédulas embaralhadas (D-AUD-03).
 
         Args:
             voto: Voto já validado e aceito pela votação.
@@ -268,9 +362,204 @@ class LogDeAuditoria:
         Returns:
             O registro criado, cujo hash é o comprovante entregue ao eleitor.
         """
-        return self.registrar(
-            TipoEvento.VOTO_REGISTRADO,
-            {"opcao": voto.opcao, "peso": voto.peso},
+        if self.politica == PoliticaIdentificacao.NOMINAL:
+            titulares = self._titulares_do_voto(voto)
+            repetidos = sorted(titulares & self._titulares_computados)
+            if repetidos:
+                msg = (
+                    f"Duplicidade: as cotas do acionista '{repetidos[0]}' já foram computadas "
+                    f"na votação '{self.id_votacao}', diretamente ou por procuração."
+                )
+                raise ValueError(msg)
+            # Voto aberto (#44): titular, opção e peso em claro, para o mapa da ata.
+            dados: dict[str, Any] = {
+                "eleitor_id": voto.eleitor_id,
+                "opcao": voto.opcao,
+                "peso": voto.peso,
+            }
+            if voto.representados:
+                dados["representados"] = list(voto.representados)
+            if voto.representacoes:
+                # #42: quem votou, as próprias ações e cada mandato exercido, em ordem
+                # determinística; tudo entra no hash do registro (RNF-AUD-06).
+                dados["procurador_id"] = _votante(voto)
+                dados["peso_proprio"] = voto.peso_proprio
+                dados["representacoes"] = [
+                    {
+                        "outorgante_id": r.outorgante_id,
+                        "peso": r.peso,
+                        "procuracao_id": r.procuracao_id,
+                    }
+                    for r in sorted(voto.representacoes, key=lambda r: r.outorgante_id)
+                ]
+            registro = self.registrar(TipoEvento.VOTO_REGISTRADO, dados)
+            self._titulares_computados |= titulares
+        else:
+            registro = self.registrar(TipoEvento.VOTO_REGISTRADO, {})
+        self._cedulas_pendentes.append([voto.opcao, voto.peso])
+        return registro
+
+    @staticmethod
+    def _titulares_do_voto(voto: Voto) -> set[str]:
+        """Acionistas cujas cotas o voto consome: o votante (se tem peso próprio) e os
+        representados."""
+        if voto.representacoes:
+            titulares = {r.outorgante_id for r in voto.representacoes}
+            if voto.peso_proprio:
+                titulares.add(_votante(voto))
+            return titulares
+        if voto.representados:
+            return set(voto.representados)
+        return {voto.eleitor_id}
+
+    def consultar_outorgante(self, outorgante_id: str) -> list[dict[str, Any]]:
+        """Onde as ações de um acionista foram computadas no log nominal (#42).
+
+        Permite ao outorgante ausente conferir que o seu procurador computou as suas
+        ações, e à Mesa auditar a delegação.
+
+        Args:
+            outorgante_id: Acionista a consultar.
+
+        Returns:
+            Um item por voto em que as ações dele entraram, com o índice do registro, quem
+            votou (`votante`), o peso dele computado, a opção e, se por procuração, o
+            identificador da procuração. Lista vazia se as ações dele não foram computadas.
+
+        Raises:
+            ValueError: Se o log for sigiloso.
+        """
+        if self.politica != PoliticaIdentificacao.NOMINAL:
+            msg = f"O log da votação '{self.id_votacao}' é sigiloso: não há consulta nominal."
+            raise ValueError(msg)
+        ocorrencias: list[dict[str, Any]] = []
+        for registro in self._registros:
+            if registro.evento != TipoEvento.VOTO_REGISTRADO:
+                continue
+            dados = registro.dados
+            for rep in dados.get("representacoes", []):
+                if rep["outorgante_id"] == outorgante_id:
+                    ocorrencias.append(
+                        {
+                            "indice": registro.indice,
+                            "votante": dados["procurador_id"],
+                            "peso": rep["peso"],
+                            "opcao": dados["opcao"],
+                            "procuracao_id": rep["procuracao_id"],
+                        }
+                    )
+            votante = dados.get("procurador_id", dados.get("eleitor_id"))
+            peso_direto = dados.get("peso_proprio", dados["peso"])
+            if votante == outorgante_id and peso_direto:
+                ocorrencias.append(
+                    {
+                        "indice": registro.indice,
+                        "votante": outorgante_id,
+                        "peso": peso_direto,
+                        "opcao": dados["opcao"],
+                        "procuracao_id": None,
+                    }
+                )
+        return ocorrencias
+
+    def mapa_nominal(self) -> list[dict[str, Any]]:
+        """Mapa de votação para a ata: cada titular com a sua opção e o seu peso.
+
+        Returns:
+            Um item por voto, na ordem de registro, com `eleitor_id`, `opcao` e `peso`
+            (e `representados`, nos votos consolidados por procuração).
+
+        Raises:
+            ValueError: Se o log for sigiloso, caso em que não há mapa nominal.
+        """
+        if self.politica != PoliticaIdentificacao.NOMINAL:
+            msg = (
+                f"O log da votação '{self.id_votacao}' é sigiloso: não guarda a "
+                "identificação dos votantes e não tem mapa nominal."
+            )
+            raise ValueError(msg)
+        return [
+            deepcopy(r.dados) for r in self._registros if r.evento == TipoEvento.VOTO_REGISTRADO
+        ]
+
+    def _publicar_cedulas(self) -> list[list[Any]]:
+        """Entrega as cédulas guardadas desde o último encerramento.
+
+        No modo sigiloso, embaralhadas; no nominal, na ordem de registro, pois a ligação
+        entre titular e voto já é pública e deve ser preservada (RNF-AUD-08).
+        """
+        cedulas = list(self._cedulas_pendentes)
+        if self.politica == PoliticaIdentificacao.SIGILOSA:
+            self._aleatorio.shuffle(cedulas)
+        self._cedulas_pendentes = []
+        return cedulas
+
+    def consultar_comprovante(
+        self, protocolo: str, ancora: ResumoEncerramento | None = None
+    ) -> ConsultaComprovante:
+        """Responde ao eleitor se o voto do comprovante está na urna encerrada.
+
+        Com a âncora do encerramento (#27), confirma a inclusão quando o protocolo
+        existe, o registro é anterior ao VOTACAO_ENCERRADA e a cadeia é aprovada contra a
+        âncora. A resposta nunca contém a opção, o peso nem o horário do voto.
+
+        Args:
+            protocolo: Comprovante entregue no momento do voto.
+            ancora: Resumo guardado pela comissão no encerramento, ou None se a votação
+                ainda não foi encerrada.
+
+        Returns:
+            Situação, explicação e instrução em linguagem não técnica.
+        """
+        registro = next(
+            (
+                r
+                for r in self._registros
+                if r.hash == protocolo.strip() and r.evento == TipoEvento.VOTO_REGISTRADO
+            ),
+            None,
+        )
+        if registro is None:
+            return ConsultaComprovante(
+                situacao=SituacaoComprovante.NAO_ENCONTRADO,
+                mensagem=(
+                    "Não encontramos um voto com este comprovante. Confira se ele foi "
+                    "copiado por inteiro e, se o problema continuar, procure a comissão "
+                    "eleitoral levando o comprovante."
+                ),
+            )
+
+        verificacao = self.verificar_integridade(ancora=ancora)
+        if not verificacao.integro:
+            return ConsultaComprovante(
+                situacao=SituacaoComprovante.CADEIA_REPROVADA,
+                mensagem=(
+                    "O registro da votação não passou na conferência de integridade, então "
+                    "não é possível confirmar a inclusão do seu voto. Procure a comissão "
+                    "eleitoral: o registro pode ter sido alterado."
+                ),
+            )
+
+        if ancora is None:
+            return ConsultaComprovante(
+                situacao=SituacaoComprovante.REGISTRADO_URNA_ABERTA,
+                mensagem=(
+                    "O seu voto foi registrado. A votação ainda não foi encerrada; depois "
+                    "do encerramento será possível confirmar que ele entrou na urna fechada."
+                ),
+            )
+
+        if registro.indice >= ancora.total_registros - 1:
+            # Voto posterior ao encerramento: a própria conferência contra a âncora já o
+            # reprova; mantido como salvaguarda explícita.
+            return ConsultaComprovante(  # pragma: no cover
+                situacao=SituacaoComprovante.CADEIA_REPROVADA,
+                mensagem="Este voto foi registrado depois do encerramento da urna.",
+            )
+
+        return ConsultaComprovante(
+            situacao=SituacaoComprovante.INCLUIDO,
+            mensagem="Registrado e incluído na urna encerrada.",
         )
 
     def verificar_integridade(

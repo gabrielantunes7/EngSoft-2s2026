@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "votacao"
-version = "1.0.0"
+version = "2.0.0"
 description = "Sistema de votação digital com motor de regras extensível"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -16,6 +16,9 @@ authors = [
     { name = "Rafael Scalabrin Dosso" },
 ]
 dependencies = []
+
+[project.scripts]
+votacao-ui = "UI:main"
 
 [project.optional-dependencies]
 dev = [
@@ -30,6 +33,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "votacao.dados" = ["*.sql"]
+"UI" = ["static/*"]
 
 
 [tool.pytest.ini_options]
@@ -83,6 +87,8 @@ select = [
 [tool.ruff.lint.per-file-ignores]
 # Testes podem usar asserts e nomes longos e descritivos sem restrição.
 "tests/**" = ["N802"]
+# Módulo de UI possui nome maiúsculo e métodos BaseHTTPRequestHandler (do_GET, do_POST)
+"src/UI/**" = ["N999", "N802"]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -45,6 +45,7 @@ dependências de desenvolvimento.
 | `make coverage` | Executa os testes medindo a cobertura e gera os relatórios |
 | `make build` | Gera os artefatos de distribuição em `dist/` |
 | `make verify` | Instala o wheel gerado em um ambiente limpo e valida a importação |
+| `make ui` | Inicia a interface web em http://127.0.0.1:8080 |
 | `make clean` | Remove artefatos de build, relatórios e caches |
 
 ## Fluxo de trabalho
@@ -52,7 +53,10 @@ dependências de desenvolvimento.
 As branches `main` e `develop` são protegidas: não é possível commitar diretamente nelas.
 Toda mudança segue o caminho abaixo.
 
-1. **Abra uma issue** descrevendo a mudança e adicione a label `Atividade2`.
+1. **Abra uma issue** descrevendo a mudança. Histórias de usuário seguem o formato
+   "Como [papel], quero [funcionalidade], para [valor]", com critérios de aceitação
+   verificáveis e referência ao épico (`#N`). Adicione a label da entrega a que a mudança
+   pertence (`Atividade2` a `Atividade5`, ou a da entrega em andamento).
 2. **Crie a branch a partir de `develop`**, nunca de `main`:
 
    ```bash
@@ -137,11 +141,17 @@ make coverage  # confirma que a cobertura atinge o mínimo
   Marcadores não declarados no `pyproject.toml` causam falha, por conta do
   `--strict-markers`. Isso é intencional: evita que um teste seja ignorado em silêncio.
 
+- Regras de quórum e apuração devem ter casos nas fronteiras (valor limite e seus
+  vizinhos), identificados por `id` no `@pytest.mark.parametrize`, como em
+  `tests/test_regra_ca.py`.
+- Mudanças na interface web (`src/UI/`) são testadas em `tests/test_ui.py`, tanto pela
+  fachada `EstadoAplicacaoUI` quanto pela API HTTP, com um servidor em porta livre.
+
 ### Cobertura
 
 A cobertura mínima definida pela equipe é de **80%**, medida com cobertura de desvio
-(*branch coverage*). Abaixo disso a verificação falha, **mesmo que todos os testes
-passem**.
+(*branch coverage*) sobre o pacote `votacao`. Abaixo disso a verificação falha, **mesmo
+que todos os testes passem**. A interface web (`src/UI/`) não entra no percentual.
 
 Ao rodar `make coverage`, o relatório detalhado fica em `htmlcov/index.html` e mostra
 exatamente quais linhas e desvios não foram exercitados. Na execução do pipeline, o mesmo
@@ -169,17 +179,34 @@ A entrega de uma versão segue o fluxo abaixo.
 2. Fazer apenas os ajustes de preparação da versão, sem novas funcionalidades.
 3. Abrir um Pull Request da `release/*` para `main`.
 4. Fazer o merge após aprovação e checks concluídos.
-5. Criar a tag da versão no commit correspondente em `main`.
-6. Atualizar a `develop` com as alterações presentes na `main`.
+5. Criar a tag da versão no commit correspondente em `main`:
+
+   ```bash
+   git checkout main
+   git pull
+   git tag -a aN-v1.0.0 -m "Descrição da entrega"
+   git push origin aN-v1.0.0
+   ```
+
+6. Atualizar a `develop` com as alterações presentes na `main`, por Pull Request da
+   `main` para a `develop`.
+
+A versão avaliada em cada entrega é a identificada pela tag. Alterações posteriores não
+são consideradas.
 
 ## Estrutura do projeto
 
 ```
 .
 ├── .github/workflows/ci.yml   # Pipeline de integração contínua
-├── src/votacao/               # Código-fonte do pacote
+├── src/votacao/               # Pacote de domínio: regras, sessão, tramitação, auditoria, dados
+├── src/UI/                    # Interface web: servidor HTTP, API REST e arquivos estáticos
 ├── tests/                     # Testes automatizados
-├── Makefile                   # Automação de build, lint, testes e cobertura
+├── docs/atividade3/           # Registros de elicitação e rastreabilidade de requisitos
+├── Makefile                   # Automação de build, lint, testes, cobertura e UI
 ├── pyproject.toml             # Metadados, dependências e configuração das ferramentas
+├── README.md                  # Visão geral, execução e arquitetura
 └── CONTRIBUTING.md
 ```
+
+A descrição de cada módulo e das decisões de arquitetura está no [README](README.md#arquitetura).

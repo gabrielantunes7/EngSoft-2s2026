@@ -70,7 +70,12 @@ class FabricaAssembleia(FabricaContextoVotacao):
         relogio: Callable[[], datetime] | None = None,
         regra: RegraAssembleia | None = None,
     ) -> SessaoVotacao:
-        """Cria uma SessaoVotacao com RegraAssembleia associada."""
+        """Cria uma SessaoVotacao com RegraAssembleia associada.
+
+        Na assembleia o voto é aberto e nominal (Lei das S/A, art. 130; CVM): a sessão
+        recusa votos enquanto algum log de auditoria dela for sigiloso (#44). Crie o log
+        com `PoliticaIdentificacao.NOMINAL`.
+        """
         if regra is None:
             regra = self.criar_regra(
                 tipo_decisao=tipo_decisao,
@@ -83,6 +88,7 @@ class FabricaAssembleia(FabricaContextoVotacao):
             "total_aptos": total_aptos,
             "log": log,
             "relogio": relogio,
+            "exige_voto_nominal": True,
         }
         if observadores is not None:
             kwargs_sessao["observadores"] = observadores

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from votacao.dados.assembleia import Acionista, Procuracao, Procurador, RepositorioAssembleia
 from votacao.elegibilidade.validador_assembleia import ValidadorElegibilidadeAssembleia
+from votacao.modelos import Representacao
 
 
 class ProcuracaoInvalidaError(ValueError):
@@ -21,12 +22,14 @@ class PoderDeVoto:
             e não delegou o seu voto a outra pessoa.
         peso_delegado: Soma das ações dos outorgantes aptos com procuração vigente.
         outorgantes: Acionistas representados, em ordem alfabética.
+        representacoes: Peso e procuração de cada outorgante, na mesma ordem (#42).
     """
 
     procurador_id: str
     peso_proprio: int = 0
     peso_delegado: int = 0
     outorgantes: tuple[str, ...] = ()
+    representacoes: tuple[Representacao, ...] = ()
 
     @property
     def peso_total(self) -> int:
@@ -163,6 +166,7 @@ class ServicoProcuracao:
 
         peso_delegado = 0
         outorgantes: list[str] = []
+        representacoes: list[Representacao] = []
         for procuracao in self.repo.listar_procuracoes_do_procurador(procurador_id):
             aptidao = ValidadorElegibilidadeAssembleia.validar_eleitor(
                 procuracao.outorgante_id,
@@ -173,12 +177,20 @@ class ServicoProcuracao:
             if aptidao.apto:
                 peso_delegado += aptidao.peso_voto
                 outorgantes.append(procuracao.outorgante_id)
+                representacoes.append(
+                    Representacao(
+                        outorgante_id=procuracao.outorgante_id,
+                        peso=aptidao.peso_voto,
+                        procuracao_id=procuracao.identificador,
+                    )
+                )
 
         return PoderDeVoto(
             procurador_id=procurador_id,
             peso_proprio=peso_proprio,
             peso_delegado=peso_delegado,
             outorgantes=tuple(sorted(outorgantes)),
+            representacoes=tuple(sorted(representacoes, key=lambda r: r.outorgante_id)),
         )
 
     def _exigir_outorgante_habilitado(self, outorgante_id: str) -> Acionista:
